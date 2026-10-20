@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">边缘手势守卫</string>
+    <string name="xposed_description">按前台应用/Activity 屏蔽左侧返回、右侧返回与底部手势（仅 Hook System UI）。</string>
+
+    <string name="search_hint">搜索应用名或包名</string>
+    <string name="include_system_apps">包含系统应用</string>
+    <string name="empty_list">没有匹配的应用</string>
+    <string name="btn_sync">重新同步到 SystemUI</string>
+    <string name="btn_accessibility">前台检测助手</string>
+
+    <string name="block_left">屏蔽左边缘返回</string>
+    <string name="block_right">屏蔽右边缘返回</string>
+    <string name="block_bottom">屏蔽底部上滑手势</string>
+    <string name="bottom_unsupported_hint">当前环境未探测到 SystemUI 侧底部手势入口，此项不可用（详见顶部状态）。</string>
+
+    <string name="summary_none">未屏蔽</string>
+    <string name="summary_none_configured">已配置（未勾选）</string>
+
+    <string name="status_title">模块状态</string>
+    <string name="status_loading">正在向 SystemUI 请求状态…</string>
+    <string name="status_no_response">SystemUI 未响应。请检查：LSPosed 已启用本模块、作用域已勾选 com.android.systemui、重启手机后 SystemUI 已重启。</string>
+
+    <string name="accessibility_service_label">边缘手势守卫 · 前台检测</string>
+    <string name="accessibility_service_description">仅用于把“当前前台应用包名/Activity”推送给 SystemUI 中的手势 Hook。不读取窗口内容（canRetrieveWindowContent=false），不联网。</string>
+    <string name="accessibility_toast">在“已下载的应用/已安装的服务”里启用“边缘手势守卫 · 前台检测”。它只上报前台包名，不读取界面内容。</string>
+</resources>

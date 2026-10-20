@@ -1,0 +1,428 @@
+package com.edgeguard.gesture.app;
+
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.view.View;
+import android.widget.AdapterView;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.CompoundButton;
+import android.widget.EditText;
+import android.widget.ListView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.edgeguard.gesture.R;
+import com.edgeguard.gesture.common.Logx;
+import com.edgeguard.gesture.common.ModuleBroadcasts;
+import com.edgeguard.gesture.common.ModuleContract;
+import com.edgeguard.gesture.common.RuleSet;
+import com.edgeguard.gesture.common.RuleStore;
+import com.edgeguard.gesture.common.StatusReport;
+
+import java.util.List;
+
+/**
+ * 控制器 UI（纯 framework 控件，不依赖 AndroidX，方便离线/CI 构建）。
+ *
+ * 流程：
+ *   打开 -> 下拉应用列表 -> 点一行展开 -> 勾选"左/右/底" -> 立即写 SharedPreferences
+ *        -> 广播给 SystemUI -> Hook 内存规则表整体替换 -> 下一次触摸立刻生效。
+ */
+public final class MainActivity extends Activity implements StatusBus.Listener {
+
+    private EditText searchView;
+    private CheckBox includeSystemView;
+    private ListView listView;
+    private TextView statusView;
+    private TextView emptyView;
+
+    private AppListAdapter adapter;
+    private RuleStore store;
+    private boolean includeSystem;
+
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private volatile boolean statusReceived;
+
+    /**
+     * 4 秒没收到 SystemUI 的任何状态回报 -> 直接告诉用户到底卡在哪一层。
+     * 光显示"正在请求"会让用户完全无法判断是没注入、广播不通、还是权限问题。
+     */
+    private final Runnable statusTimeout = new Runnable() {
+        @Override
+        public void run() {
+            if (statusReceived) {
+                return;
+            }
+            renderNoResponse();
+        }
+    };
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        try {
+            setContentView(R.layout.activity_main);
+            store = new RuleStore(this);
+
+            searchView = findViewById(R.id.search);
+            includeSystemView = findViewById(R.id.include_system);
+            listView = findViewById(R.id.app_list);
+            statusView = findViewById(R.id.status_view);
+            emptyView = findViewById(R.id.empty_view);
+
+            adapter = new AppListAdapter(this, store, new AppListAdapter.Listener() {
+                @Override
+                public void onRulesChanged(String packageName, boolean blockLeft,
+                                           boolean blockRight, boolean blockBottom) {
+                    RuleSet rules = store.load();
+                    ModuleBroadcasts.pushRules(MainActivity.this, rules);
+                    Logx.i("rule changed: " + packageName
+                            + " L=" + blockLeft + " R=" + blockRight + " B=" + blockBottom
+                            + " total=" + rules.size());
+                }
+            });
+            listView.setAdapter(adapter);
+            listView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+                @Override
+                public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+                    adapter.toggle(position);
+                }
+            });
+
+            searchView.addTextChangedListener(new TextWatcher() {
+                @Override
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                }
+
+                @Override
+                public void onTextChanged(CharSequence s, int start, int before, int count) {
+                }
+
+                @Override
+                public void afterTextChanged(Editable s) {
+                    adapter.setQuery(s == null ? "" : s.toString());
+                    updateEmptyView();
+                }
+            });
+
+            includeSystemView.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+                @Override
+                public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                    includeSystem = isChecked;
+                    loadApps();
+                }
+            });
+
+            Button syncButton = findViewById(R.id.btn_sync);
+            syncButton.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    ModuleBroadcasts.pushRules(MainActivity.this, store.load());
+                    ModuleBroadcasts.requestStatus(MainActivity.this);
+                    Toast.makeText(MainActivity.this, "已重新同步规则并请求状态", Toast.LENGTH_SHORT).show();
+                }
+            });
+
+            Button accessibilityButton = findViewById(R.id.btn_accessibility);
+            accessibilityButton.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    openAccessibilitySettings();
+                }
+            });
+
+            includeSystem = includeSystemView.isChecked();
+            loadApps();
+        } catch (Throwable t) {
+            Logx.e("MainActivity.onCreate failed", t);
+            Toast.makeText(this, "初始化失败，请查看 logcat（TAG=EdgeGestureGuard）", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        StatusBus.setListener(this);
+        statusReceived = false;
+        uiHandler.removeCallbacks(statusTimeout);
+        uiHandler.postDelayed(statusTimeout, 4000L);
+        try {
+            // SystemUI 可能刚重启，主动补推一次规则
+            ModuleBroadcasts.pushRules(this, store.load());
+            ModuleBroadcasts.requestStatus(this);
+            StatusReport last = StatusBus.last(this);
+            if (last != null) {
+                renderStatus(last);
+            }
+        } catch (Throwable t) {
+            Logx.w("onResume sync failed", t);
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        StatusBus.setListener(null);
+        uiHandler.removeCallbacks(statusTimeout);
+        super.onPause();
+    }
+
+    @Override
+    public void onStatus(StatusReport report) {
+        statusReceived = true;
+        uiHandler.removeCallbacks(statusTimeout);
+        renderStatus(report);
+    }
+
+    private void loadApps() {
+        try {
+            emptyView.setVisibility(View.GONE);
+            new AppListLoader(this).loadAsync(includeSystem, new AppListLoader.Callback() {
+                @Override
+                public void onLoaded(List<AppEntry> apps) {
+                    adapter.setData(apps);
+                    updateEmptyView();
+                }
+            });
+        } catch (Throwable t) {
+            Logx.w("loadApps failed", t);
+        }
+    }
+
+    private void updateEmptyView() {
+        try {
+            emptyView.setVisibility(adapter.getCount() == 0 ? View.VISIBLE : View.GONE);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void renderStatus(StatusReport report) {
+        if (report == null) {
+            return;
+        }
+        try {
+            adapter.setBottomSupported(report.bottomUsable());
+            StringBuilder sb = new StringBuilder();
+            sb.append(getString(R.string.status_title)).append('\n');
+            if (report.edgeHooked) {
+                sb.append("· 左右返回 Hook：已挂载\n    ").append(report.edgeTarget);
+            } else {
+                sb.append("· 左右返回 Hook：未挂载\n    ").append(report.edgeTarget);
+            }
+            sb.append('\n');
+            if (report.bottomUsable()) {
+                sb.append("· 底部手势 Hook：已挂载（依 ROM 差异可能只部分生效）\n    ")
+                        .append(report.bottomTarget);
+            } else {
+                sb.append("· 底部手势 Hook：当前环境不支持 → 已降级为仅左右返回屏蔽");
+            }
+            sb.append('\n').append("· 前台应用来源：").append(strategyName(report.foregroundStrategy));
+            if (report.foregroundPackage != null && report.foregroundPackage.length() > 0) {
+                sb.append("\n    最近前台：").append(report.foregroundPackage);
+                if (report.foregroundActivity != null && report.foregroundActivity.length() > 0) {
+                    sb.append('/').append(report.foregroundActivity);
+                }
+            }
+            if (report.foregroundError != null && report.foregroundError.length() > 0) {
+                sb.append("\n    提示：").append(report.foregroundError);
+            }
+            sb.append('\n').append("· Hook 内规则条数：").append(report.ruleCount);
+            if (report.edgeMetrics != null && report.edgeMetrics.length() > 0) {
+                sb.append('\n').append("· 边缘几何：").append(report.edgeMetrics);
+            }
+
+            // 可执行的告警（不用猜，照着做即可）
+            if (!report.edgeHooked) {
+                sb.append("\n\n⚠ 未挂载任何手势入口：请确认 LSPosed 已启用本模块、作用域只勾 SystemUI、"
+                        + "并且重启过 SystemUI/手机。");
+            }
+            if (report.ruleCount == 0) {
+                sb.append("\n⚠ Hook 内规则条数为 0：规则没送到 SystemUI（点下方「重新同步到 SystemUI」；"
+                        + "若仍为 0，可能模块被冻结或 SystemUI 未重启）。");
+            }
+            if ("none".equals(report.foregroundStrategy) || report.foregroundStrategy == null) {
+                sb.append("\n⚠ 前台应用识别失败，此时按设计「不屏蔽」。请点「前台检测助手」启用无障碍助手。");
+            }
+            appendSelfCheck(sb);
+            statusView.setText(sb.toString());
+        } catch (Throwable t) {
+            Logx.w("renderStatus failed", t);
+        }
+    }
+
+    private String strategyName(String strategy) {
+        if (strategy == null || strategy.length() == 0 || "none".equals(strategy)) {
+            return "未知（安全默认：不屏蔽）";
+        }
+        if (strategy.startsWith("atm") || strategy.startsWith("am:")) {
+            return "ActivityTaskManager 反射查询";
+        }
+        if (strategy.startsWith("accessibility")) {
+            return "无障碍助手推送";
+        }
+        if (strategy.startsWith("usage")) {
+            return "UsageStatsManager 兜底";
+        }
+        return strategy;
+    }
+
+    /** SystemUI 侧自检记录（Settings.Global，由 Hook 端写入；App 读取不需要任何权限）。 */
+    private String readDiag() {
+        try {
+            String v = Settings.Global.getString(getContentResolver(), ModuleContract.DIAG_GLOBAL_KEY);
+            return (v == null || v.length() == 0) ? null : v;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** LSPosed Manager 是否装了（模块要生效，这个是前提）。 */
+    private boolean hasLsposed() {
+        String[] names = {"org.lsposed.manager", "io.github.lsposed.manager", "org.lsposed.lspd"};
+        PackageManager pm = getPackageManager();
+        for (String name : names) {
+            try {
+                pm.getPackageInfo(name, 0);
+                return true;
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
+    }
+
+    private String moduleVersion() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    private String readGlobal(String key) {
+        try {
+            String v = Settings.Global.getString(getContentResolver(), key);
+            return (v == null || v.length() == 0) ? null : v;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 读 Hook 端写在「本 App 外部目录」里的执行轨迹（不需要任何权限）。 */
+    private String readHookTrace() {
+        try {
+            java.io.File dir = getExternalFilesDir(null);
+            if (dir == null) {
+                return null;
+            }
+            java.io.File file = new java.io.File(dir, "hook-status.txt");
+            if (!file.exists()) {
+                return null;
+            }
+            java.io.FileInputStream in = new java.io.FileInputStream(file);
+            try {
+                byte[] buf = new byte[(int) Math.min(file.length(), 8192)];
+                int read = in.read(buf);
+                if (read <= 0) {
+                    return null;
+                }
+                return new String(buf, 0, read, "UTF-8");
+            } finally {
+                in.close();
+            }
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 只保留轨迹的最后几行，方便直接看结论。 */
+    private String tailLines(String text, int maxLines) {
+        if (text == null) {
+            return null;
+        }
+        String[] lines = text.trim().split("\n");
+        int start = Math.max(0, lines.length - maxLines);
+        StringBuilder sb = new StringBuilder();
+        for (int i = start; i < lines.length; i++) {
+            if (sb.length() > 0) {
+                sb.append('\n');
+            }
+            sb.append(lines[i]);
+        }
+        return sb.toString();
+    }
+
+    private void appendSelfCheck(StringBuilder sb) {
+        String diag = readDiag();
+        String loaded = readGlobal(ModuleContract.LOADED_GLOBAL_KEY);
+        sb.append("\n\n—— 自检 ——");
+        sb.append("\n· 模块版本：").append(moduleVersion());
+
+        // 判定以「自检记录」为准：它由 Hook 端在拿到真实 App Context 后写入，
+        // 而 early marker 在 handleLoadPackage 阶段常因包名/uid 校验写不进去，不能当判据。
+        if (diag != null) {
+            sb.append("\n· 判定：模块已注入并在 SystemUI 中运行");
+        } else if (loaded != null) {
+            sb.append("\n· 判定：模块已加载，但 Hook 初始化未完成");
+        } else {
+            sb.append("\n· 判定：模块未被注入（自检记录与标记都为空）");
+        }
+        sb.append("\n· SystemUI 自检记录：").append(diag == null ? "无" : diag);
+        sb.append("\n· 注入标记：").append(loaded == null
+                ? "未写入（早期写入受限，可忽略）" : loaded);
+        String trace = tailLines(readHookTrace(), 4);
+        sb.append("\n· 轨迹文件：").append(trace == null
+                ? "未写入（可忽略，以上一行自检记录为准）" : "");
+        if (trace != null) {
+            sb.append('\n').append(trace);
+        }
+    }
+
+    /** 4 秒无回报时渲染的诊断页（不猜，给出可执行清单）。 */
+    private void renderNoResponse() {
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("SystemUI 未响应（4 秒内没有任何状态回报）\n");
+            String diag = readDiag();
+            String loaded = readGlobal(ModuleContract.LOADED_GLOBAL_KEY);
+            if (diag == null && loaded == null) {
+                sb.append("\n判定：模块没有在 SystemUI 里运行起来（自检记录为空）。\n");
+                sb.append("\n请依次检查：\n");
+                sb.append("1) LSPosed 是否真的装了：下方「LSPosed Manager」一行；\n");
+                sb.append("2) LSPosed → 模块 → 打开「边缘手势守卫」总开关；\n");
+                sb.append("3) 点进本模块 → 作用域 → 勾选 System UI；\n");
+                sb.append("4) 勾完必须重启手机（或重启 SystemUI）；\n");
+                sb.append("5) Android 17 需要支持该版本的 LSPosed 分支。\n");
+            } else if (diag == null) {
+                sb.append("\n判定：模块**已加载**进 SystemUI（注入标记：").append(loaded).append("），\n");
+                sb.append("但 Hook 初始化没跑完（没有自检记录）。\n");
+                sb.append("\n请在 LSPosed → 日志 里找 com.edgeguard.gesture 的报错行。\n");
+            } else {
+                sb.append("\n判定：模块已注入 SystemUI（自检记录存在），问题在广播通道。\n");
+                sb.append("记录：").append(diag).append("\n");
+                sb.append("\n请点下方「重新同步到 SystemUI」；仍不同步时本模块会自动改用\n");
+                sb.append("ContentProvider 轮询拉取规则（约 15 秒一次）。\n");
+            }
+            appendSelfCheck(sb);
+            statusView.setText(sb.toString());
+        } catch (Throwable t) {
+            Logx.w("renderNoResponse failed", t);
+        }
+    }
+
+    private void openAccessibilitySettings() {
+        Toast.makeText(this, R.string.accessibility_toast, Toast.LENGTH_LONG).show();
+        try {
+            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+        } catch (Throwable t) {
+            Logx.w("open accessibility settings failed", t);
+        }
+    }
+}

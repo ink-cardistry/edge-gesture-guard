@@ -1,0 +1,57 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.edgeguard.gesture'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.edgeguard.gesture"
+        minSdk 30              // Android 11+；实测目标 LineageOS 24 / Android 17
+        targetSdk 35
+        versionCode 12
+        versionName "1.2.0"
+    }
+
+    buildTypes {
+        debug {
+            // 反射探测依赖类名/方法名字符串，任何情况下都不能混淆
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        resources {
+            excludes += ['META-INF/*.kotlin_module', 'META-INF/*.version', 'META-INF/*.md']
+        }
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    /*
+     * Xposed / LSPosed API 必须是 compileOnly：
+     *   - compileOnly 不参与打包，不会进入 classes.dex；
+     *   - 若使用 implementation，LSPosed 会因为 APK 内自带 Xposed 类而拒绝加载模块。
+     *
+     * 方式 A（默认，离线可用）：仓库根目录自带 libs/api-82.jar
+     * 方式 B（联网，官方 maven 仓库）：把下面一行打开即可
+     *      compileOnly 'de.robv.android.xposed:api:82'
+     */
+    compileOnly files('libs/api-82.jar')
+}
