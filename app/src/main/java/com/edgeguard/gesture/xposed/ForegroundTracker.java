@@ -50,8 +50,13 @@ final class ForegroundTracker {
 
     private static final Object LOCK = new Object();
 
-    /** 结果缓存时间：一次手势里可能连续来很多事件，只允许 400ms 查一次。 */
-    private static final long CACHE_TTL_MS = 400L;
+    /**
+     * 结果缓存时间。
+     *
+     * 400ms 太短：一次滑动往往超过 400ms，会在滑动途中反复触发 Binder 查询。
+     * 前台应用切换的频率远低于此，3s 足够准确，同时把 Binder 调用量降到原来的 1/7。
+     */
+    private static final long CACHE_TTL_MS = 3000L;
     /** 无障碍推送的有效期：这类事件只在切换窗口时来，给足余量。 */
     private static final long PUSH_TTL_MS = 10L * 60L * 1000L;
 
@@ -82,6 +87,102 @@ final class ForegroundTracker {
         cached = new Fg(packageName, pushedActivity, "accessibility-push");
         cachedAt = pushedAt;
         Logx.i("foreground pushed: " + cached.describe());
+    }
+
+    // ------------------------------------------------------------------
+    // 推送式前台变化（TaskStackListener）
+    // ------------------------------------------------------------------
+
+    private static volatile boolean tracking;
+    private static volatile android.os.Handler worker;
+    private static volatile long lastStackEventAt;
+
+    /** TaskStackListener 注册成功后置位：之后触摸回调不再做 Binder 查询。 */
+    static void enableTracking() {
+        tracking = true;
+    }
+
+    static boolean isTracking() {
+        return tracking;
+    }
+
+    /** 仅供触摸回调使用：直接拿缓存，绝不触发查询（缓存过期也先用旧值）。 */
+    static Fg cachedOnly() {
+        return cached;
+    }
+
+    /** 系统回调（Binder 线程）：只置脏 + 异步刷新，去抖 250ms。 */
+    static void onTaskStackChanged() {
+        try {
+            long now = SystemClock.uptimeMillis();
+            if (now - lastStackEventAt < 250L) {
+                return;
+            }
+            lastStackEventAt = now;
+            android.os.Handler h = worker();
+            if (h != null) {
+                h.removeCallbacks(REFRESH);
+                h.postDelayed(REFRESH, 120L);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static final Runnable REFRESH = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                forceRefresh();
+            } catch (Throwable t) {
+                Logx.w("foreground refresh failed", t);
+            }
+        }
+    };
+
+    private static void forceRefresh() {
+        synchronized (LOCK) {
+            Fg fg = queryAtms();
+            if (fg == null) {
+                fg = fromPush(SystemClock.elapsedRealtime());
+            }
+            if (fg == null) {
+                fg = queryUsageStats();
+            }
+            if (fg != null) {
+                cached = fg;
+                cachedAt = SystemClock.elapsedRealtime();
+                HookRuntime.noteForeground(fg.strategy, "");
+            }
+        }
+    }
+
+    private static android.os.Handler worker() {
+        android.os.Handler h = worker;
+        if (h != null) {
+            return h;
+        }
+        synchronized (ForegroundTracker.class) {
+            h = worker;
+            if (h == null) {
+                android.os.HandlerThread thread = new android.os.HandlerThread("edgeguard-fg");
+                thread.start();
+                h = new android.os.Handler(thread.getLooper());
+                worker = h;
+            }
+        }
+        return h;
+    }
+
+    /** 立即在后台刷新一次（只在初始化 / 注册监听后调用一次，不是定时器）。 */
+    static void refreshAsync() {
+        try {
+            android.os.Handler h = worker();
+            if (h != null) {
+                h.post(REFRESH);
+            }
+        } catch (Throwable t) {
+            Logx.w("refreshAsync failed", t);
+        }
     }
 
     static Fg get() {

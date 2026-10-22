@@ -9,7 +9,7 @@ LSPosed 模块：**按前台应用 / Activity 动态屏蔽「左边缘返回」�
 | LSPosed 作用域 | **只需要 System UI（`com.android.systemui`）** |
 | Hook 入口类 | `com.edgeguard.gesture.xposed.XposedEntry`（`assets/xposed_init`） |
 | 日志 TAG | `EdgeGestureGuard` |
-| 已构建产物 | `dist/EdgeGestureGuard-1.2.0-debug.apk`（debug 签名，61 KB，MD5 `3342fe761017832942df4f5c4f848e31`）|
+| 已构建产物 | `dist/EdgeGestureGuard-1.3.0-debug.apk`（debug 签名，61 KB，MD5 `3342fe761017832942df4f5c4f848e31`）|
 | 真机验证 | **LineageOS 24 / Android 17 (SDK 37) 实测通过**：左右返回屏蔽生效 |
 
 ### 0.1 真机实测结论（LineageOS 24 / Android 17）
@@ -408,3 +408,51 @@ BLOCK LEFT gesture, foreground=com.xxx/com.xxx.MainActivity [atm:getTasks4]
    （状态卡显示未挂载），请保持 LSPosed 默认设置。
 6. 不做「手势区域视觉提示」（不画额外箭头/高亮）。
 7. 只支持触摸屏；不支持外接鼠标/手写笔的特殊手势路径。
+---
+
+## 6.2 省电优化（1.2.1）
+
+| 项 | 之前 | 现在 | 节省 |
+|---|---|---|---|
+| 规则兜底轮询 | 每 15s 一次的 `HandlerThread` 轮询，永不停 | 启动 20s 后**只拉一次**，失败再重试一次即停；收到过广播则完全不启动 | 去掉一个常驻定时唤醒源 |
+| 热路径写文件 | 每吞一个事件都 `StatusFile.append()`（/sdcard 写入） | 已删除；每事件日志降级为 `Xlog.debug`，默认**完全关闭** | 滑动时不再有磁盘 IO |
+| 无规则时的开销 | 仍然解析 MotionEvent、查表 | `gate()` 开头判空直接返回 | 空闲时零开销 |
+| 前台应用查询 | 400ms 缓存，一次滑动会多次 Binder | **3s** 缓存 | Binder 调用降到约 1/7 |
+| BLOCK 日志 | 每次屏蔽都写 | 同一侧 2s 内最多一条 | 日志量大幅下降 |
+| 事件查表 | 每次事件 `synchronized` | `ConcurrentHashMap` 无锁读 | 去掉输入回调里的锁 |
+
+**稳态耗电预期**：不滑动时没有任何定时器/轮询（SystemUI 里只有两个被动 Hook + 一个广播接收器），
+滑动时每条事件只做一次规则表引用读取 + 一次哈希查表，不再有文件 IO 或 Binder。
+## 6.3 只在目标应用前台时才介入（1.3.0）
+
+之前的实现是「每次手指碰到边缘 → 查一次前台应用（4/3 秒缓存）→ 再判断要不要拦」。
+1.3.0 改成**推送式**：
+
+```
+SystemUI 启动
+  └─ 注册 TaskStackListener（系统推送：任务栈变化时回调）
+       └─ 回调里只置脏 + 异步去抖 120ms 刷新一次前台缓存（HandlerThread）
+
+手指触到边缘
+  └─ 读两个 volatile 字段：规则表 / 缓存的前台包名
+       ├─ 规则为空            → 直接放行（零开销）
+       ├─ 前台不是目标应用    → 直接放行（零开销）★ 这就是「不启动」
+       └─ 前台是目标应用      → 才进入左右判定与拦截
+```
+
+| 项 | 1.2.1 | 1.3.0 |
+|---|---|---|
+| 触摸回调里的 Binder | 3s 缓存，仍会周期性触发 | **0 次**（只用缓存） |
+| 空闲时唤醒 | 无定时器 | 无定时器（纯系统回调驱动） |
+| 非目标应用在前台 | 每次触摸都要判一次 | 两个字段读完直接返回 |
+| 降级 | — | `TaskStackListener` 注册失败时自动退回「按需查询」，行为同 1.2.1 |
+
+实现细节：`android.app.TaskStackListener` 是 @hide 类，仓库里用 `stubs/` 下的编译桩
+（`app/libs/hidden-stub.jar`，**compileOnly，不进 APK**）编译，运行时解析到系统真类。
+
+自检日志（modules.log）会出现：
+
+```
+[EdgeGestureGuard] task-stack listener registered
+[EdgeGestureGuard] foreground tracking: push mode (触摸路径零 Binder)
+```

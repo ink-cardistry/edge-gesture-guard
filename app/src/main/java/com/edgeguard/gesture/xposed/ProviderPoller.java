@@ -3,35 +3,34 @@ package com.edgeguard.gesture.xposed;
 import android.content.Context;
 import android.database.Cursor;
 import android.os.Handler;
-import android.os.HandlerThread;
-import android.os.SystemClock;
+import android.os.Looper;
 
 import com.edgeguard.gesture.common.Logx;
 import com.edgeguard.gesture.common.ModuleContract;
 
 /**
- * 兜底规则通道：从模块 App 的 ContentProvider 主动拉规则。
+ * 兜底规则通道（省电版：**没有周期轮询**）。
  *
- * 只在一种情况下工作：**SystemUI 启动后一段时间内一次广播都没收到**
- * （说明 App -> SystemUI 的广播在这台 ROM 上不通），此时改用轮询 provider。
- * 一旦收到任意广播，轮询自动停止，不影响功耗。
+ * 只在一种情况下动作：SystemUI 启动 20 秒后仍未收到任何规则广播
+ * （说明这台 ROM 上 App -> SystemUI 的广播不通），此时**拉取一次** provider，
+ * 成功即结束；失败再重试一次（60s 后），然后彻底停止。
  *
- * 用独立 HandlerThread，绝不占用 SystemUI 主线程/输入线程。
+ * 旧版是 15s 一次的无限轮询 —— 那是常驻唤醒源，已移除。
  */
 final class ProviderPoller implements Runnable {
 
-    private static final long FIRST_DELAY_MS = 8000L;
-    private static final long INTERVAL_MS = 15000L;
-    private static final long FAIL_INTERVAL_MS = 60000L;
+    private static final long FIRST_DELAY_MS = 20_000L;
+    private static final long RETRY_DELAY_MS = 60_000L;
 
     private static volatile boolean started;
     private static Handler handler;
 
     private final Context context;
-    private int failures = 0;
+    private final int attempt;
 
-    private ProviderPoller(Context context) {
+    private ProviderPoller(Context context, int attempt) {
         this.context = context;
+        this.attempt = attempt;
     }
 
     static void start(Context context) {
@@ -40,61 +39,33 @@ final class ProviderPoller implements Runnable {
         }
         started = true;
         try {
-            HandlerThread thread = new HandlerThread("edgeguard-rule-poll");
-            thread.start();
-            handler = new Handler(thread.getLooper());
-            handler.postDelayed(new ProviderPoller(context.getApplicationContext() == null
-                    ? context : context.getApplicationContext()), FIRST_DELAY_MS);
-            Logx.i("provider poller armed (fires only if no broadcast ever arrives)");
+            handler = new Handler(Looper.getMainLooper());
+            handler.postDelayed(new ProviderPoller(context, 0), FIRST_DELAY_MS);
         } catch (Throwable t) {
-            Logx.w("provider poller start failed", t);
-        }
-    }
-
-    private static void reschedule(Runnable runnable, long delay) {
-        Handler h = handler;
-        if (h != null) {
-            h.postDelayed(runnable, delay);
+            Logx.w("poller start failed", t);
         }
     }
 
     @Override
     public void run() {
         try {
-            // 收到过广播说明主通道正常，彻底停止轮询
-            if (RulesPipe.lastBroadcastAt > 0) {
-                Logx.i("broadcast channel works, provider poller stops");
+            // 已经收到过广播说明通道是通的，什么都不用做
+            if (RulesPipe.lastBroadcastAt != 0L) {
+                Logx.i("provider pull skipped: broadcast channel alive");
                 return;
             }
-            Cursor cursor = null;
-            try {
-                cursor = context.getContentResolver().query(
-                        ModuleContract.RULES_URI, null, null, null, null);
-                if (cursor != null && cursor.moveToFirst()) {
-                    String json = cursor.getString(0);
-                    if (json != null && json.length() > 0) {
-                        RulesPipe.applyRules(json, "provider-poll");
-                    }
-                }
-                failures = 0;
-            } catch (Throwable t) {
-                failures++;
-                if (failures == 1) {
-                    Logx.w("provider poll failed（继续尝试，60s 一次）", t);
-                }
-            } finally {
-                if (cursor != null) {
-                    try {
-                        cursor.close();
-                    } catch (Throwable ignored) {
-                    }
-                }
+            if (RulesPipe.pullFromProvider(context)) {
+                Logx.i("provider pull ok");
+                return;
+            }
+            if (attempt == 0 && handler != null) {
+                handler.postDelayed(new ProviderPoller(context, 1), RETRY_DELAY_MS);
+            } else {
+                Logx.w("provider pull gave up (广播不通且 provider 不可用)");
             }
         } catch (Throwable t) {
-            Logx.w("provider poller error", t);
+            Logx.w("provider pull failed", t);
         }
-        long delay = failures > 2 ? FAIL_INTERVAL_MS : INTERVAL_MS;
-        Logx.i("provider poller next in " + delay + "ms (failures=" + failures + ")");
-        reschedule(this, delay);
     }
+
 }

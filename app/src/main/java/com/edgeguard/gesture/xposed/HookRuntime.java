@@ -21,6 +21,9 @@ final class HookRuntime {
      */
     static volatile Context pipeContext;
 
+    /** 调试开关：true 时才会打印每事件日志（默认关闭，避免 IO 与日志刷屏）。 */
+    static final boolean DEBUG = false;
+
     static volatile RuleSet rules = RuleSet.EMPTY;
     static final StatusReport status = new StatusReport();
 

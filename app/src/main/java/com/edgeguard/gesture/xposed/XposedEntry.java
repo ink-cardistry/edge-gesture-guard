@@ -165,7 +165,25 @@ public final class XposedEntry implements IXposedHookLoadPackage {
             Logx.e("RulesPipe.init failed", t);
             Xlog.step("pipe init FAILED: " + t);
         }
+        // 推送式前台跟踪：装好后触摸回调不再做 Binder 查询。
+        // 注册失败时自动退回"按需查询"（行为与旧版一致），不影响功能。
+        try {
+            if (!stackWatchStarted) {
+                stackWatchStarted = true;
+                if (TaskStackWatch.start()) {
+                    ForegroundTracker.enableTracking();
+                    ForegroundTracker.refreshAsync();
+                    Xlog.step("foreground tracking: push mode (触摸路径零 Binder)");
+                } else {
+                    Xlog.step("foreground tracking: fallback (按需查询)");
+                }
+            }
+        } catch (Throwable t) {
+            Xlog.step("task-stack setup failed: " + t);
+        }
     }
+
+    private static volatile boolean stackWatchStarted;
 
     private static Context currentContext() {
         // 纯反射获取，绝不 import LSPosed 专有类（见 Ctx 的注释）

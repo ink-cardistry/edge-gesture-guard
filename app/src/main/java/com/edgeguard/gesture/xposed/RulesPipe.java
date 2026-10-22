@@ -200,19 +200,22 @@ final class RulesPipe {
     // Provider 兜底
     // ------------------------------------------------------------------
 
-    private static void pullFromProvider(Context context) {
+    /** 兜底拉取一次；返回是否真的拿到了规则（省电版只在必要时调用一次）。 */
+    static boolean pullFromProvider(Context context) {
+        boolean ok = false;
         Cursor cursor = null;
         try {
             cursor = context.getContentResolver().query(ModuleContract.RULES_URI, null, null, null, null);
             if (cursor == null) {
                 Logx.i("provider pull: 无结果（包可见性/SELinux 拦截属正常，主通道是广播）");
-                return;
+                return false;
             }
             if (!cursor.moveToFirst()) {
                 Logx.i("provider pull: 空结果");
-                return;
+                return false;
             }
             applyRules(cursor.getString(0), "provider");
+            ok = true;
         } catch (Throwable t) {
             Logx.w("provider pull failed（可接受，主通道是广播）", t);
         } finally {
@@ -223,6 +226,7 @@ final class RulesPipe {
                 }
             }
         }
+        return ok;
     }
 
     // ------------------------------------------------------------------

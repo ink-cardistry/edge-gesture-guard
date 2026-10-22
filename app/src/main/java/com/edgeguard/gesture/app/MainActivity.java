@@ -375,6 +375,17 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
             sb.append("\n· 判定：模块未被注入（自检记录与标记都为空）");
         }
         sb.append("\n· SystemUI 自检记录：").append(diag == null ? "无" : diag);
+
+        // 版本一致性检查：SystemUI 里跑的是"进程启动时加载的"那份代码，
+        // 装新 APK 不会替换它 —— 这是最容易误判成"新功能没生效"的原因。
+        String runningVersion = extractVersion(diag);
+        String installedVersion = moduleVersion();
+        if (runningVersion != null && installedVersion != null
+                && !runningVersion.equals(installedVersion)) {
+            sb.append("\n· ⚠ SystemUI 里仍在运行 v").append(runningVersion)
+                    .append("，App 是 v").append(installedVersion)
+                    .append("\n  → 新版本还没生效：请重启手机（或 root 下 killall com.android.systemui）");
+        }
         sb.append("\n· 注入标记：").append(loaded == null
                 ? "未写入（早期写入受限，可忽略）" : loaded);
         String trace = tailLines(readHookTrace(), 4);
@@ -382,6 +393,31 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
                 ? "未写入（可忽略，以上一行自检记录为准）" : "");
         if (trace != null) {
             sb.append('\n').append(trace);
+        }
+    }
+
+    /** 从自检记录里取 v=x.y.z。 */
+    private static String extractVersion(String diag) {
+        if (diag == null) {
+            return null;
+        }
+        try {
+            int index = diag.indexOf("v=");
+            if (index < 0) {
+                return null;
+            }
+            int end = index + 2;
+            while (end < diag.length()) {
+                char c = diag.charAt(end);
+                if (c == ';' || Character.isWhitespace(c)) {
+                    break;
+                }
+                end++;
+            }
+            String version = diag.substring(index + 2, end).trim();
+            return version.length() == 0 ? null : version;
+        } catch (Throwable t) {
+            return null;
         }
     }
 

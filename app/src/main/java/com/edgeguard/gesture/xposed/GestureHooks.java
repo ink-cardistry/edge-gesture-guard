@@ -374,10 +374,11 @@ final class GestureHooks {
                 }
                 if (finishInputEvent(param.thisObject, input, true)) {
                     param.setResult(null);
-                    Xlog.step("consumed input event (action=" + event.getActionMasked() + ")");
+                    Xlog.debug("consumed input event (action=" + event.getActionMasked() + ")");
                 } else {
                     HookLogic.abortStream(event);
                     Xlog.step("finishInputEvent UNAVAILABLE -> allow gesture");
+                    // 这一条很少见（只在框架反射失败时出现），保留 step 便于排障
                     Logx.w("finishInputEvent 不可用，已放弃本次屏蔽（避免输入通道阻塞）");
                 }
             } catch (Throwable t) {

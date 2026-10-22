@@ -5,8 +5,10 @@ local.properties
 .DS_Store
 build/
 .out/
+.stubout/
 captures/
 .externalNativeBuild/
 .cxx/
 *.keystore
 !app/libs/api-82.jar
+!app/libs/hidden-stub.jar

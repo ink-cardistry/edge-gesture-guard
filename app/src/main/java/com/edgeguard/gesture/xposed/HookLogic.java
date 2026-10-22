@@ -9,6 +9,7 @@ import com.edgeguard.gesture.common.RuleSet;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 手势闸门（真正做"屏蔽/放行"决策的地方）。
@@ -30,7 +31,8 @@ import java.util.Map;
 final class HookLogic {
 
     private static final Object LOCK = new Object();
-    private static final Map<Long, Long> BLOCKED_STREAMS = new HashMap<>();
+    /** 无锁读取：输入回调里不再为了查表加锁。 */
+    private static final Map<Long, Long> BLOCKED_STREAMS = new ConcurrentHashMap<>();
     private static final long STREAM_TTL_MS = 5000L;
 
     private HookLogic() {
@@ -68,6 +70,23 @@ final class HookLogic {
     private static boolean gate(Object handler, MotionEvent ev, boolean edge, boolean trustedEdge) {
         if (ev == null) {
             return false;
+        }
+        // 最省电的快速路径①：一条规则都没有时，连事件内容都不看，直接放行。
+        RuleSet snapshot = HookRuntime.rules;
+        if (snapshot == null || snapshot.size() == 0) {
+            return false;
+        }
+        // 快速路径②：前台不是"需要屏蔽"的应用时，直接放行。
+        // 这一步只读两个 volatile 字段（缓存的前台包名 + 规则表），没有 Binder、没有分配。
+        if (ForegroundTracker.isTracking()) {
+            ForegroundTracker.Fg fg = ForegroundTracker.cachedOnly();
+            if (fg == null || fg.packageName == null) {
+                return false;
+            }
+            RuleSet.Decision d = snapshot.decide(fg.packageName, fg.activityName);
+            if (d == null || (!d.blockLeft && !d.blockRight && !d.blockBottom)) {
+                return false;
+            }
         }
         final int action = ev.getActionMasked();
         final long key = streamKey(ev);
@@ -113,13 +132,17 @@ final class HookLogic {
                         block = decision.blockBottom;
                     }
                 }
-                if (candidate) {
+                if (candidate && HookRuntime.DEBUG) {
                     diagDown(side, block, ev);
                 }
                 if (block) {
                     BLOCKED_STREAMS.put(key, now);
-                    Logx.i("BLOCK " + side + " gesture, foreground=" + describeForeground()
-                            + ", x=" + ev.getX() + ", y=" + ev.getY());
+                    // 只在真正屏蔽时记一条（同一侧 2 秒内最多一条），避免刷屏与额外 IO
+                long last = lastBlockLogAt;
+                if (now - last > 2000L) {
+                    lastBlockLogAt = now;
+                    Xlog.step("BLOCK " + side + " gesture");
+                }
                 }
             }
             Long started = BLOCKED_STREAMS.get(key);
@@ -134,6 +157,7 @@ final class HookLogic {
     }
 
     private static long lastDiagAt;
+    private static long lastBlockLogAt;
 
     /** 把"这次边缘触摸到底判成什么"写进 modules.log（限流 400ms，避免刷屏）。 */
     private static void diagDown(String side, boolean block, MotionEvent ev) {
@@ -144,7 +168,7 @@ final class HookLogic {
         lastDiagAt = now;
         try {
             ForegroundTracker.Fg fg = ForegroundTracker.get();
-            Xlog.step("edge DOWN side=" + side + " block=" + block
+            Xlog.debug("edge DOWN side=" + side + " block=" + block
                     + " x=" + (int) ev.getX()
                     + " fg=" + (fg == null ? "null" : fg.packageName)
                     + " rules=" + (HookRuntime.rules == null ? 0 : HookRuntime.rules.size()));
@@ -170,7 +194,7 @@ final class HookLogic {
                     Reflect.field(handler.getClass(), "mIsOnLeftEdge", "mOnLeftEdge"), false);
             RuleSet.Decision decision = decisionForForeground();
             boolean block = onLeftEdge ? decision.blockLeft : decision.blockRight;
-            Xlog.step("backInvoked: left=" + onLeftEdge + " block=" + block + " fg=" + describeForeground());
+            Xlog.debug("backInvoked: left=" + onLeftEdge + " block=" + block + " fg=" + describeForeground());
             return block;
         } catch (Throwable t) {
             Xlog.step("backInvoked check failed: " + t);
@@ -188,7 +212,10 @@ final class HookLogic {
             if (rules == null || rules.size() == 0) {
                 return RuleSet.Decision.NONE;
             }
-            ForegroundTracker.Fg fg = ForegroundTracker.get();
+            // 有推送式前台跟踪时，只用缓存（触摸线程绝不阻塞在 Binder 上）
+            ForegroundTracker.Fg fg = ForegroundTracker.isTracking()
+                    ? ForegroundTracker.cachedOnly()
+                    : ForegroundTracker.get();
             if (fg == null || fg.packageName == null || fg.packageName.length() == 0) {
                 return RuleSet.Decision.NONE;
             }
