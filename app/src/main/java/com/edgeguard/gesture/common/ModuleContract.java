@@ -19,8 +19,39 @@ public final class ModuleContract {
     /** 模块自身包名（与 build.gradle 的 applicationId 保持一致） */
     public static final String MODULE_PACKAGE = "com.edgeguard.gesture";
 
-    /** 唯一作用域：System UI */
+    /** 默认（也是唯一必需）作用域：System UI */
     public static final String SYSTEMUI_PACKAGE = "com.android.systemui";
+
+    /**
+     * 可选作用域：桌面 / Launcher（策略 B 专用，默认关闭）。
+     *
+     * 为什么需要：AOSP 16/17 的底部上滑由 Launcher 进程的
+     * com.android.quickstep.TouchInteractionService 执行，SystemUI 里没有最终执行逻辑。
+     * 用户只有手工把作用域扩展到这里、并在 UI 里打开开关，策略 B 才可能生效。
+     * 清单里**不预填**这些作用域（xposedscope 只声明 SystemUI），确保默认视角最小。
+     */
+    public static final String[] LAUNCHER_PACKAGES = {
+            "com.android.launcher3",
+            "com.google.android.apps.nexuslauncher",
+            "com.android.launcher",
+            "com.miui.home",
+            "com.bbk.launcher2",
+            "com.oppo.launcher",
+            "com.huawei.android.launcher",
+    };
+
+    /** 是否是我们认识的桌面/Launcher 包名。 */
+    public static boolean isLauncherPackage(String packageName) {
+        if (packageName == null) {
+            return false;
+        }
+        for (String name : LAUNCHER_PACKAGES) {
+            if (name.equals(packageName)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /** 规则 Provider authority */
     public static final String AUTHORITY = MODULE_PACKAGE + ".rules";
@@ -36,6 +67,29 @@ public final class ModuleContract {
     public static final String ACTION_STATUS_REQUEST = MODULE_PACKAGE + ".action.STATUS_REQUEST";
     /** App -> SystemUI：前台应用变化（无障碍助手推送） */
     public static final String ACTION_FOREGROUND_PUSH = MODULE_PACKAGE + ".action.FOREGROUND_PUSH";
+
+    /**
+     * App -> SystemUI：「游戏模式」会话总闸（启用/退出）。
+     *
+     * 为什么总闸放在 SystemUI 里而不是 App 的 SharedPreferences：
+     *  - SystemUI 常驻，一定能收到 SCREEN_OFF / USER_PRESENT，锁屏后解锁自动退出才不会漏；
+     *  - App 进程随时可能被冻结/杀死，放 App 会出现"已经锁屏解锁了但还在拦"的鬼状态。
+     * App 只是"遥控器"：发命令 + 显示状态。
+     */
+    public static final String ACTION_ARM = MODULE_PACKAGE + ".action.ARM";
+    public static final String ACTION_DISARM = MODULE_PACKAGE + ".action.DISARM";
+
+    /** 常驻通知上的按钮（App 内部显式广播，不导出） */
+    public static final String ACTION_NOTIFY_EXIT = MODULE_PACKAGE + ".action.NOTIFY_EXIT";
+    public static final String ACTION_NOTIFY_TOGGLE = MODULE_PACKAGE + ".action.NOTIFY_TOGGLE";
+
+    /** App 侧"最近一次已知"的游戏模式状态（权威值永远来自 SystemUI 的状态回推） */
+    public static final String PREF_ARMED = "armed";
+    public static final String PREF_ARMED_SOURCE = "armed_source";
+
+    /** 常驻通知 */
+    public static final int NOTIF_ID_GAME_MODE = 0x45444701;
+    public static final String CHANNEL_GAME_MODE = "edgeguard_game_mode";
 
     public static final String EXTRA_RULES_JSON = "rules_json";
     public static final String EXTRA_STATUS_JSON = "status_json";

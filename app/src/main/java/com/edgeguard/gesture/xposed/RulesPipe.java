@@ -90,6 +90,12 @@ final class RulesPipe {
         } catch (Throwable t) {
             Logx.w("start poller failed", t);
         }
+        try {
+            // 游戏模式的"锁屏后解锁自动退出"必须由 SystemUI 侧实现（App 可能已被冻结）
+            ArmController.startLockWatch(context);
+        } catch (Throwable t) {
+            Logx.w("startLockWatch failed", t);
+        }
     }
 
     static void applyRules(String json, String source) {
@@ -98,7 +104,11 @@ final class RulesPipe {
         }
         RuleSet set = RuleSet.fromJson(json);
         HookRuntime.rules = set;
-        Xlog.step("rules applied from " + source + ": " + set.size() + " 条");
+        // 配置随规则表一起下发：顶部/底部比例、验证模式、Launcher 开关
+        HookRuntime.config = set.config();
+        HookRuntime.refreshDerived();
+        Xlog.step("rules applied from " + source + ": " + set.size() + " 条, "
+                + set.config().describe());
         Context context = HookRuntime.anyContext();
         if (context != null) {
             saveCache(context, set.toJson());
@@ -141,6 +151,10 @@ final class RulesPipe {
                 lastBroadcastAt = android.os.SystemClock.elapsedRealtime();
                 if (ModuleContract.ACTION_RULES_PUSH.equals(action)) {
                     applyRules(intent.getStringExtra(ModuleContract.EXTRA_RULES_JSON), "broadcast");
+                } else if (ModuleContract.ACTION_ARM.equals(action)) {
+                    ArmController.arm("app");
+                } else if (ModuleContract.ACTION_DISARM.equals(action)) {
+                    ArmController.disarm("app");
                 } else if (ModuleContract.ACTION_FOREGROUND_PUSH.equals(action)) {
                     ForegroundTracker.onPushed(
                             intent.getStringExtra(ModuleContract.EXTRA_PACKAGE),
@@ -157,6 +171,8 @@ final class RulesPipe {
     private static void registerReceiver(Context context) {
         IntentFilter filter = new IntentFilter();
         filter.addAction(ModuleContract.ACTION_RULES_PUSH);
+        filter.addAction(ModuleContract.ACTION_ARM);
+        filter.addAction(ModuleContract.ACTION_DISARM);
         filter.addAction(ModuleContract.ACTION_FOREGROUND_PUSH);
         filter.addAction(ModuleContract.ACTION_STATUS_REQUEST);
         if (Build.VERSION.SDK_INT >= 33) {

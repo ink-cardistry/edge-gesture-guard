@@ -1,0 +1,306 @@
+package com.edgeguard.gesture.xposed;
+
+import android.view.MotionEvent;
+
+import com.edgeguard.gesture.common.Logx;
+import com.edgeguard.gesture.common.StatusReport;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XposedBridge;
+
+/**
+ * 通知栏下拉屏蔽（功能二，**全部在 com.android.systemui 进程内完成**）。
+ *
+ * 拦截点选择思路：
+ *   下拉动作由 shade 的触摸链驱动，链条大致是
+ *       NotificationShadeWindowView.dispatch/onIntercept/onTouchEvent
+ *         -> 面板控制器（NotificationPanelViewController / ShadeTouchEventHandler）
+ *           -> 面板展开动画
+ *   我们在**链条的每一层都挂**（谁存在挂谁），任一层的 beforeHookedMethod 命中就把
+ *   这条手势流整条吞掉（返回 true / 不调用原方法）：下游收不到 DOWN，展开状态机不会启动。
+ *
+ * 为什么"整条流吞掉"而不是"改 expand fraction"：
+ *   面板内部会在 DOWN 时重算自己的状态，外部改字段既可能被覆盖，也可能与 ROM 补丁冲突；
+ *   不喂事件是语义最干净的做法，且天然不影响未屏蔽的应用（未命中规则时我们分毫不动参数）。
+ *
+ * 安全阀（缺一不可）：
+ *   1) 前台包名命中 blockTopShade；
+ *   2) 起手 rawY 在屏幕顶部 topZoneRatio（默认 12%）以内；
+ *   3) 通知栏当前**不是已展开**状态（已展开时用户要能点通知，绝不拦）。
+ *
+ * 找不到任何候选类 -> status.shadeState=unsupported，UI 明确显示"不可用"，不假装成功。
+ */
+final class ShadeHooks {
+
+    private static final Set<String> HOOKED = new HashSet<>();
+
+    private ShadeHooks() {
+    }
+
+    static int install(ClassLoader classLoader, StatusReport status) {
+        int total = 0;
+        StringBuilder attached = new StringBuilder();
+        StringBuilder missing = new StringBuilder();
+        try {
+            List<Class<?>> classes = Targets.loadAll(classLoader, Targets.SHADE_TOUCH_CLASSES);
+            for (Class<?> cls : classes) {
+                int hooked = hookClass(cls);
+                total += hooked;
+                if (hooked > 0) {
+                    if (attached.length() > 0) {
+                        attached.append(" / ");
+                    }
+                    attached.append(cls.getSimpleName()).append('=').append(hooked);
+                }
+            }
+            // 记录"哪些候选根本不存在"，方便用户按 logcat 补名字
+            for (String name : Targets.SHADE_TOUCH_CLASSES) {
+                boolean found = false;
+                for (Class<?> cls : classes) {
+                    if (cls.getName().equals(name)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    if (missing.length() > 0) {
+                        missing.append(", ");
+                    }
+                    missing.append(Targets.simpleName(name));
+                }
+            }
+        } catch (Throwable t) {
+            Logx.e("ShadeHooks.install failed", t);
+            if (status != null) {
+                status.shadeState = StatusReport.SHADE_UNSUPPORTED;
+                status.shadeTarget = "安装异常: " + t.getClass().getSimpleName();
+            }
+            return 0;
+        }
+
+        if (status != null) {
+            status.shadeState = total > 0
+                    ? StatusReport.SHADE_ATTACHED : StatusReport.SHADE_UNSUPPORTED;
+            StringBuilder sb = new StringBuilder();
+            sb.append("已挂载: ").append(attached.length() == 0 ? "无" : attached.toString());
+            if (missing.length() > 0) {
+                sb.append(" | 候选缺失: ").append(missing);
+            }
+            status.shadeTarget = sb.toString();
+        }
+        Logx.i("shade hooks: " + total + " 个入口; 已挂载="
+                + (attached.length() == 0 ? "无" : attached.toString())
+                + (missing.length() == 0 ? "" : "; 候选缺失=" + missing));
+        if (total == 0) {
+            Logx.w("通知栏下拉 Hook 未挂载：A17 的 shade 触摸链可能已被重构。"
+                    + "请把 logcat 里 'shade candidates' 行贴出来补候选名（本模块此时明确降级，不假装生效）。");
+        }
+        return total;
+    }
+
+    private static int hookClass(Class<?> cls) {
+        int count = 0;
+        List<Targets.TouchMethod> methods;
+        try {
+            methods = Targets.collectTouchMethods(cls, Targets.SHADE_TOUCH_METHODS);
+        } catch (Throwable t) {
+            Logx.w("collect shade methods failed: " + cls.getName(), t);
+            return 0;
+        }
+        Logx.i("shade candidates on " + cls.getName() + ": " + methods.size());
+        for (Targets.TouchMethod cand : methods) {
+            String signature = cand.signature();
+            String key = "SHADE|" + signature;
+            if (HOOKED.contains(key)) {
+                continue;
+            }
+            try {
+                XposedBridge.hookMethod(cand.method, new ShadeTouchHook(signature, cand.carriesEvent));
+                HOOKED.add(key);
+                count++;
+                Logx.i("hooked [SHADE] " + signature
+                        + " returns " + cand.method.getReturnType().getSimpleName()
+                        + (cand.carriesEvent ? " (带 MotionEvent)" : " (无参，用最近一次 DOWN)"));
+            } catch (Throwable t) {
+                Logx.w("hook failed: " + signature, t);
+            }
+        }
+        return count;
+    }
+
+    // ------------------------------------------------------------------
+    // 回调
+    // ------------------------------------------------------------------
+
+    private static final class ShadeTouchHook extends XC_MethodHook {
+
+        private final String signature;
+        private final boolean carriesEvent;
+
+        ShadeTouchHook(String signature, boolean carriesEvent) {
+            this.signature = signature;
+            this.carriesEvent = carriesEvent;
+        }
+
+        @Override
+        protected void beforeHookedMethod(MethodHookParam param) {
+            try {
+                boolean consume;
+                if (carriesEvent) {
+                    MotionEvent event = extract(param.args);
+                    if (event == null) {
+                        return;
+                    }
+                    consume = HookLogic.gateShadeTouch(param.thisObject, event,
+                            ShadeStateProbe.isExpanded(param.thisObject));
+                } else {
+                    // 无参 onQsIntercept()：靠"最近一次 DOWN 在顶部区 + 规则命中"来判断，
+                    // 再叠加一次"通知栏未展开"的安全阀。
+                    consume = HookLogic.shouldBlockCurrentDown()
+                            && !ShadeStateProbe.isExpanded(param.thisObject);
+                }
+                if (consume) {
+                    InputSink.consumeReturn(param);
+                }
+            } catch (Throwable t) {
+                // 出异常就不 setResult —— 原方法照常执行 = 恢复系统默认行为
+                Logx.w("shade hook callback failed: " + signature + " (放行原逻辑)", t);
+            }
+        }
+
+        private MotionEvent extract(Object[] args) {
+            if (args == null) {
+                return null;
+            }
+            for (Object arg : args) {
+                if (arg instanceof MotionEvent) {
+                    return (MotionEvent) arg;
+                }
+            }
+            return null;
+        }
+    }
+
+    /**
+     * "通知栏是否已展开"探测。
+     *
+     * 只读、失败即 false（= 当作未展开）。取不到时并不是灾难：
+     * 拦截还要求"前台是目标应用 + 起手在顶部 12%"两个条件同时成立，
+     * 影响面被限制在"目标应用在前台时顶部 12% 的触摸"。
+     */
+    private static final class ShadeStateProbe {
+
+        private static final String[] METHODS = {
+                "isFullyExpanded", "isExpanded", "isPanelExpanded",
+                "isShadeExpanded", "isFullyCollapsed", "getExpansionFraction",
+                "getShadeExpansionFrac", "getExpandedFraction",
+        };
+        private static final String[] BOOL_FIELDS = {"mIsExpanded", "mExpanded", "mPanelExpanded"};
+        private static final String[] FLOAT_FIELDS = {"mExpandedFraction", "mExpansionFraction"};
+
+        private static volatile Class<?> probedClass;
+        private static volatile Method expandMethod;
+        private static volatile Field boolField;
+        private static volatile Field floatField;
+        private static volatile boolean probed;
+        private static volatile boolean warned;
+
+        static boolean isExpanded(Object owner) {
+            if (owner == null) {
+                return false;
+            }
+            try {
+                Class<?> cls = owner.getClass();
+                if (cls != probedClass) {
+                    probe(cls);
+                }
+                Method m = expandMethod;
+                if (m != null) {
+                    Object value = m.invoke(owner);
+                    if (value instanceof Boolean) {
+                        // isFullyCollapsed 语义相反，单独处理
+                        if ("isFullyCollapsed".equals(m.getName())) {
+                            return !((Boolean) value);
+                        }
+                        return (Boolean) value;
+                    }
+                    if (value instanceof Number) {
+                        return ((Number) value).floatValue() > 0.99f;
+                    }
+                    return false;
+                }
+                Field bf = boolField;
+                if (bf != null) {
+                    Object value = bf.get(owner);
+                    return value instanceof Boolean && (Boolean) value;
+                }
+                Field ff = floatField;
+                if (ff != null) {
+                    Object value = ff.get(owner);
+                    return value instanceof Number && ((Number) value).floatValue() > 0.99f;
+                }
+                return false;
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+
+        private static void probe(Class<?> cls) {
+            probedClass = cls;
+            expandMethod = null;
+            boolField = null;
+            floatField = null;
+            try {
+                Class<?> c = cls;
+                int guard = 0;
+                while (c != null && c != Object.class && guard++ < 6) {
+                    for (Method m : c.getDeclaredMethods()) {
+                        if (m.getParameterTypes().length != 0) {
+                            continue;
+                        }
+                        String name = m.getName();
+                        for (String candidate : METHODS) {
+                            if (candidate.equals(name)) {
+                                m.setAccessible(true);
+                                expandMethod = m;
+                                break;
+                            }
+                        }
+                        if (expandMethod != null) {
+                            break;
+                        }
+                    }
+                    if (expandMethod != null) {
+                        break;
+                    }
+                    c = c.getSuperclass();
+                }
+            } catch (Throwable ignored) {
+            }
+            if (expandMethod == null) {
+                boolField = Reflect.field(cls, BOOL_FIELDS);
+                floatField = Reflect.field(cls, FLOAT_FIELDS);
+            }
+            if (!probed) {
+                probed = true;
+                Logx.i("shade expansion probe on " + cls.getSimpleName() + ": method="
+                        + (expandMethod == null ? "none" : expandMethod.getName())
+                        + ", boolField=" + (boolField == null ? "none" : boolField.getName())
+                        + ", floatField=" + (floatField == null ? "none" : floatField.getName())
+                        + (expandMethod == null && boolField == null && floatField == null
+                        ? "  -> 取不到展开状态，按未展开处理" : ""));
+            }
+            if (expandMethod == null && boolField == null && floatField == null && !warned) {
+                warned = true;
+                Logx.w("无法读取通知栏展开状态：若出现『通知栏展开时顶部点击被吞』，"
+                        + "请把 shade 类的字段名贴出来补候选。");
+            }
+        }
+    }
+}

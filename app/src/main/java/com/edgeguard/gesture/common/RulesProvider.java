@@ -58,7 +58,8 @@ public final class RulesProvider extends ContentProvider {
             if (packages != null) {
                 for (String p : packages) {
                     if (ModuleContract.MODULE_PACKAGE.equals(p)
-                            || ModuleContract.SYSTEMUI_PACKAGE.equals(p)) {
+                            || ModuleContract.SYSTEMUI_PACKAGE.equals(p)
+                            || ModuleContract.isLauncherPackage(p)) {
                         return true;
                     }
                 }

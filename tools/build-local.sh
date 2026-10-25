@@ -23,6 +23,8 @@ if [ -z "$D8_JAR" ]; then echo "need D8_JAR"; exit 1; fi
 if [ -z "$JAVA" ]; then JAVA=java; fi
 if [ -z "$JAVAC" ]; then JAVAC=javac; fi
 if [ -z "$XPOSED_JAR" ]; then XPOSED_JAR=$ROOT/app/libs/api-82.jar; fi
+# @hide 类的编译桩（TaskStackListener 等）：只参与编译，不进 APK
+HIDDEN_STUB=$ROOT/app/libs/hidden-stub.jar
 OUT=$ROOT/.out
 
 echo "== 1/6 clean"
@@ -57,7 +59,7 @@ echo "== 4/6 链接资源 + 生成 R.java (versionCode=$VC versionName=$VN)"
 
 echo "== 5/6 编译 Java + dex"
 "$JAVAC" -encoding UTF-8 -source 17 -target 17 -nowarn \
-    -classpath "$ANDROID_JAR:$XPOSED_JAR" -d "$OUT/classes" \
+    -classpath "$ANDROID_JAR:$XPOSED_JAR:$HIDDEN_STUB" -d "$OUT/classes" \
     $(find app/src/main/java -name '*.java') "$OUT/gen/com/edgeguard/gesture/R.java"
 "$JAVA" -cp "$D8_JAR" com.android.tools.r8.D8 --min-api 30 --lib "$ANDROID_JAR" \
     --output "$OUT/dex" $(find "$OUT/classes" -name '*.class')

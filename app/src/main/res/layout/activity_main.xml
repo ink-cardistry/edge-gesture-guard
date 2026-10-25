@@ -36,8 +36,9 @@
         android:text="@string/include_system_apps"
         android:textSize="14sp" />
 
+    <!-- 摘要：默认只占 2~4 行，保证下面的应用列表永远够用手指操作 -->
     <TextView
-        android:id="@+id/status_view"
+        android:id="@+id/status_brief"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="@drawable/bg_panel"
@@ -45,8 +46,47 @@
         android:padding="10dp"
         android:text="@string/status_loading"
         android:textColor="?android:attr/textColorSecondary"
-        android:textIsSelectable="true"
         android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/status_toggle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="end"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp"
+        android:text="@string/status_show_detail"
+        android:textColor="?android:attr/textColorSecondary"
+        android:textSize="11sp" />
+
+    <!-- 详情：固定高度 + 内部滚动，展开也不会把列表挤出屏幕 -->
+    <ScrollView
+        android:id="@+id/status_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="200dp"
+        android:background="@drawable/bg_panel"
+        android:padding="8dp"
+        android:scrollbars="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/status_view"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:lineSpacingExtra="2dp"
+            android:text="@string/status_loading"
+            android:textColor="?android:attr/textColorSecondary"
+            android:textIsSelectable="true"
+            android:textSize="12sp" />
+    </ScrollView>
+
+    <Button
+        android:id="@+id/btn_game_mode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/btn_game_mode_off"
+        android:textSize="13sp" />
 
     <FrameLayout
         android:layout_width="match_parent"
@@ -72,6 +112,30 @@
             android:textSize="14sp"
             android:visibility="gone" />
     </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingTop="4dp">
+
+        <Button
+            android:id="@+id/btn_game_preset"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/btn_game_preset"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btn_tuning"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:text="@string/btn_tuning"
+            android:textSize="12sp" />
+    </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"

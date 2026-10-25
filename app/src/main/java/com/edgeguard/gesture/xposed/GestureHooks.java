@@ -52,7 +52,7 @@ final class GestureHooks {
 
     static void install(ClassLoader classLoader) {
         StatusReport status = HookRuntime.status;
-        status.moduleVersion = "1.2.0";
+        status.moduleVersion = "1.5.1";
 
         Class<?> edgeClass = null;
         try {
@@ -78,6 +78,15 @@ final class GestureHooks {
             Xlog.step("BackInvocationGuard.install failed: " + t);
         }
 
+        // 功能二：通知栏下拉屏蔽（仍在 SystemUI 进程内，独立于返回手势 Hook）
+        int shadeCount = 0;
+        try {
+            shadeCount = ShadeHooks.install(classLoader, status);
+        } catch (Throwable t) {
+            Logx.e("ShadeHooks.install failed", t);
+            Xlog.step("ShadeHooks.install FAILED: " + t);
+        }
+
         HookRuntime.legacyHooks = legacyCount;
         HookRuntime.modernHooks = modernCount;
         status.edgeHooked = legacyCount > 0 || modernCount > 0;
@@ -88,6 +97,7 @@ final class GestureHooks {
         }
         target.append("\n新架构 InputEventReceiver: ").append(modernCount).append(" 个入口");
         target.append("\n返回触发拦截 (onBackInvoked): ").append(backCallbackCount).append(" 个入口");
+        target.append("\n通知栏下拉 (shade 触摸链): ").append(shadeCount).append(" 个入口");
         if (MODERN_DETAIL.length() > 0) {
             target.append("\n候选: ").append(MODERN_DETAIL);
         }
@@ -107,7 +117,9 @@ final class GestureHooks {
         Xlog.step("hooks installed: edge=" + status.edgeHooked
                 + ", legacy=" + legacyCount + ", modern=" + modernCount
                 + ", backCallback=" + backCallbackCount
-                + ", bottom=" + status.bottomState);
+                + ", shade=" + status.shadeState + "(" + shadeCount + ")"
+                + ", bottom=" + status.bottomState
+                + ", zones[" + HookRuntime.config.describe() + "]");
         Logx.i("hook install finished: edge=" + status.edgeHooked
                 + " (legacy=" + legacyCount + ", modern=" + modernCount + ")"
                 + " bottom=" + status.bottomState);
@@ -364,15 +376,14 @@ final class GestureHooks {
                 // 只处理"返回手势"这条 InputChannelCompat 通道：
                 // 导航条 home handle 等也走同一个 receiver 类，必须按 listener 类型过滤。
                 Object listener = Reflect.fieldValue(param.thisObject, "val$listener");
-                if (listener == null
-                        || !listener.getClass().getName().contains("DisplayBackGestureHandlerImpl")) {
+                if (!isBackGestureListener(listener)) {
                     return;
                 }
                 MotionEvent event = (MotionEvent) input;
                 if (!HookLogic.onEdgeTouchFromGestureMonitor(param.thisObject, event)) {
                     return;
                 }
-                if (finishInputEvent(param.thisObject, input, true)) {
+                if (InputSink.finish(param.thisObject, input, true)) {
                     param.setResult(null);
                     Xlog.debug("consumed input event (action=" + event.getActionMasked() + ")");
                 } else {
@@ -384,6 +395,31 @@ final class GestureHooks {
             } catch (Throwable t) {
                 Logx.w("input hook callback failed: " + signature + " (放行原逻辑)", t);
             }
+        }
+    }
+
+    /**
+     * 是不是"返回手势"那条 gesture monitor 的 listener。
+     *
+     * 实测（LineageOS 24 / A17）：DisplayBackGestureHandlerImpl$inputEventReceiver$1；
+     * AOSP main 的对应实现叫 EdgeBackGestureHandler（注册的 monitor 名是 "edge-swipe"，
+     * 且**不设区域 = 整屏监视**，SystemUI 在 onMotionEvent 里自己按边缘条带过滤）。
+     *
+     * 两种命名都接受，其余（home handle 等复用同一包装类的通道）一律放行 ——
+     * 这正是"不能无条件拦整个 receiver"的那条约束。
+     */
+    private static boolean isBackGestureListener(Object listener) {
+        try {
+            if (listener == null) {
+                return false;
+            }
+            String name = listener.getClass().getName();
+            return name.contains("DisplayBackGestureHandlerImpl")
+                    || name.contains("EdgeBackGestureHandler")
+                    || name.contains("BackGestureHandlerImpl")
+                    || name.contains("BackGestureHandler");
+        } catch (Throwable t) {
+            return false;
         }
     }
 
@@ -440,34 +476,4 @@ final class GestureHooks {
         }
     }
 
-    /**
-     * 结束一个输入事件（必须！）。
-     * android.view.InputEventReceiver#finishInputEvent(InputEvent, boolean) 是 @hide，
-     * 在 LSPosed 的 hidden-api bypass 下可反射调用。
-     */
-    private static boolean finishInputEvent(Object receiver, InputEvent event, boolean handled) {
-        if (receiver == null || event == null) {
-            return false;
-        }
-        Method method = null;
-        Class<?> cls = receiver.getClass();
-        while (cls != null && cls != Object.class && method == null) {
-            try {
-                method = cls.getDeclaredMethod("finishInputEvent", InputEvent.class, boolean.class);
-            } catch (Throwable ignored) {
-                cls = cls.getSuperclass();
-            }
-        }
-        if (method == null) {
-            return false;
-        }
-        try {
-            method.setAccessible(true);
-            method.invoke(receiver, event, handled);
-            return true;
-        } catch (Throwable t) {
-            Logx.w("finishInputEvent invoke failed", t);
-            return false;
-        }
-    }
 }

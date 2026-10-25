@@ -11,21 +11,37 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 不可变规则表（整体替换，便于在触摸回调里无锁读取）。
+ * 不可变规则表 + 全局配置（整体替换，便于在触摸回调里无锁读取）。
  * Hook 进程只读取，App 进程只整体写入。
+ *
+ * 线上格式（version 2）：
+ * <pre>
+ * {"version":2,
+ *  "config":{"top":0.12,"bottom":0.12,"verify":false,"launcher":false},
+ *  "rules":[{"package":"com.x","left":true,"right":true,"bottom":false,"top":true}]}
+ * </pre>
+ * version 1（没有 config）照常解析：config 取默认值。
+ * 未知字段一律忽略，因此新老 App / Hook 混装也不会崩。
  */
 public final class RuleSet {
 
-    public static final int FORMAT_VERSION = 1;
-    public static final RuleSet EMPTY = new RuleSet(Collections.<String, Rule>emptyMap());
+    public static final int FORMAT_VERSION = 2;
+    public static final RuleSet EMPTY = new RuleSet(Collections.<String, Rule>emptyMap(),
+            ModuleConfig.DEFAULT);
 
     private final Map<String, Rule> byKey;
+    private final ModuleConfig config;
 
-    private RuleSet(Map<String, Rule> byKey) {
+    private RuleSet(Map<String, Rule> byKey, ModuleConfig config) {
         this.byKey = byKey;
+        this.config = config == null ? ModuleConfig.DEFAULT : config;
     }
 
     public static RuleSet of(List<Rule> rules) {
+        return of(rules, ModuleConfig.DEFAULT);
+    }
+
+    public static RuleSet of(List<Rule> rules, ModuleConfig config) {
         Map<String, Rule> map = new LinkedHashMap<>();
         if (rules != null) {
             for (Rule r : rules) {
@@ -35,7 +51,16 @@ public final class RuleSet {
                 map.put(r.key(), r);
             }
         }
-        return new RuleSet(Collections.unmodifiableMap(map));
+        return new RuleSet(Collections.unmodifiableMap(map), config);
+    }
+
+    public ModuleConfig config() {
+        return config;
+    }
+
+    /** 保留全部规则，只换配置（App 侧改阈值/验证模式用）。 */
+    public RuleSet withConfig(ModuleConfig newConfig) {
+        return new RuleSet(byKey, newConfig);
     }
 
     public int size() {
@@ -74,13 +99,15 @@ public final class RuleSet {
      */
     public Decision decide(String packageName, String activityName) {
         Rule r = find(packageName, activityName);
-        return r == null ? Decision.NONE : new Decision(r.blockLeft, r.blockRight, r.blockBottom);
+        return r == null ? Decision.NONE
+                : new Decision(r.blockLeft, r.blockRight, r.blockBottom, r.blockTopShade);
     }
 
     public String toJson() {
         try {
             JSONObject root = new JSONObject();
             root.put("version", FORMAT_VERSION);
+            config.writeTo(root);
             JSONArray arr = new JSONArray();
             for (Rule r : byKey.values()) {
                 try {
@@ -104,9 +131,10 @@ public final class RuleSet {
         }
         try {
             JSONObject root = new JSONObject(json);
+            ModuleConfig config = ModuleConfig.fromJson(root.optJSONObject("config"));
             JSONArray arr = root.optJSONArray("rules");
             if (arr == null) {
-                return EMPTY;
+                return new RuleSet(Collections.<String, Rule>emptyMap(), config);
             }
             List<Rule> list = new ArrayList<>();
             for (int i = 0; i < arr.length(); i++) {
@@ -115,7 +143,7 @@ public final class RuleSet {
                     list.add(r);
                 }
             }
-            return of(list);
+            return of(list, config);
         } catch (Throwable t) {
             Logx.w("RuleSet.fromJson failed", t);
             return EMPTY;
@@ -124,25 +152,33 @@ public final class RuleSet {
 
     @Override
     public String toString() {
-        return "RuleSet(" + byKey.size() + ")";
+        return "RuleSet(" + byKey.size() + ", " + config.describe() + ")";
     }
 
     public static final class Decision {
 
-        public static final Decision NONE = new Decision(false, false, false);
+        public static final Decision NONE = new Decision(false, false, false, false);
 
         public final boolean blockLeft;
         public final boolean blockRight;
         public final boolean blockBottom;
+        public final boolean blockTopShade;
 
-        public Decision(boolean blockLeft, boolean blockRight, boolean blockBottom) {
+        public Decision(boolean blockLeft, boolean blockRight,
+                        boolean blockBottom, boolean blockTopShade) {
             this.blockLeft = blockLeft;
             this.blockRight = blockRight;
             this.blockBottom = blockBottom;
+            this.blockTopShade = blockTopShade;
+        }
+
+        /** 兼容旧调用点。 */
+        public Decision(boolean blockLeft, boolean blockRight, boolean blockBottom) {
+            this(blockLeft, blockRight, blockBottom, false);
         }
 
         public boolean any() {
-            return blockLeft || blockRight || blockBottom;
+            return blockLeft || blockRight || blockBottom || blockTopShade;
         }
     }
 }

@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <!-- 开机后主动把规则推给 SystemUI（SystemUI 重启/手机重启都能自动恢复） -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 游戏模式的"寄生通知"（API 33+ 需要运行时授权；没有授权时磁贴与锁屏退出仍可用） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -68,6 +70,31 @@
                 <action android:name="com.edgeguard.gesture.action.STATUS_PUSH" />
             </intent-filter>
         </receiver>
+
+        <!-- ================= 游戏模式：常驻通知按钮 ================= -->
+        <receiver
+            android:name=".app.ArmedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.edgeguard.gesture.action.NOTIFY_EXIT" />
+                <action android:name="com.edgeguard.gesture.action.NOTIFY_TOGGLE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- ================= 游戏模式：控制中心磁贴 ================= -->
+        <service
+            android:name=".app.GameTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_game_mode"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
 
         <!-- ================= 可选前台应用助手（无障碍推送，默认关闭） ================= -->
         <service

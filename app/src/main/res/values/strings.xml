@@ -1,18 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">边缘手势守卫</string>
-    <string name="xposed_description">按前台应用/Activity 屏蔽左侧返回、右侧返回与底部手势（仅 Hook System UI）。</string>
+    <string name="xposed_description">按前台应用/Activity 屏蔽左/右返回、顶部下拉通知栏与底部上滑（默认仅 Hook System UI）。</string>
 
     <string name="search_hint">搜索应用名或包名</string>
     <string name="include_system_apps">包含系统应用</string>
     <string name="empty_list">没有匹配的应用</string>
     <string name="btn_sync">重新同步到 SystemUI</string>
     <string name="btn_accessibility">前台检测助手</string>
+    <string name="btn_game_preset">音游预设（顶+底）</string>
+    <string name="btn_tuning">阈值/验证</string>
 
     <string name="block_left">屏蔽左边缘返回</string>
     <string name="block_right">屏蔽右边缘返回</string>
-    <string name="block_bottom">屏蔽底部上滑手势</string>
-    <string name="bottom_unsupported_hint">当前环境未探测到 SystemUI 侧底部手势入口，此项不可用（详见顶部状态）。</string>
+    <string name="block_top_shade">屏蔽顶部下拉通知栏</string>
+    <string name="block_bottom">屏蔽底部上滑（实验性）</string>
+
+    <string name="top_shade_ok_hint" formatted="false">已在 SystemUI 的通知栏触摸链上挂载（详见状态卡）。只拦屏幕顶部 12% 内、起手向下的手势。</string>
+    <string name="top_shade_unsupported_hint">未探测到通知栏触摸入口：当前 ROM 上此项不生效（安全降级，不拦任何触摸）。详见状态卡与 logcat。</string>
+    <string name="bottom_unsupported_hint">实验性：输入通道至今未观测到底部区域事件（seen=0），说明策略 A 在此 ROM 上不可用。详见状态卡与 README 第 12 节。</string>
+    <string name="bottom_observed_hint">实验性：输入通道已观测到底部区域事件（seen&gt;0）。请实测上滑是否仍回桌面；仍生效则需扩展 Launcher 作用域（策略 B）。</string>
 
     <string name="summary_none">未屏蔽</string>
     <string name="summary_none_configured">已配置（未勾选）</string>
@@ -24,4 +31,30 @@
     <string name="accessibility_service_label">边缘手势守卫 · 前台检测</string>
     <string name="accessibility_service_description">仅用于把“当前前台应用包名/Activity”推送给 SystemUI 中的手势 Hook。不读取窗口内容（canRetrieveWindowContent=false），不联网。</string>
     <string name="accessibility_toast">在“已下载的应用/已安装的服务”里启用“边缘手势守卫 · 前台检测”。它只上报前台包名，不读取界面内容。</string>
+
+    <string name="status_show_detail">详情 ▾</string>
+    <string name="status_hide_detail">收起 ▴</string>
+
+    <string name="btn_game_mode_off">游戏模式：已关（点此启用 顶+底）</string>
+    <string name="btn_game_mode_on">游戏模式：已开（点此退出）</string>
+    <string name="game_mode_on_toast" formatted="false">游戏模式已开：屏蔽顶部下拉 + 底部上滑。锁屏后解锁会自动退出。</string>
+    <string name="game_mode_off_toast">游戏模式已退出，系统手势恢复正常</string>
+
+    <string name="notif_title">游戏模式：已启用</string>
+    <string name="notif_text">顶部下拉 + 底部上滑已屏蔽 · 锁屏解锁自动退出</string>
+    <string name="notif_text_long" formatted="false">已屏蔽顶部下拉与底部上滑，防止打音游时误触。
+退出：① 锁屏后解锁（自动退出）；② 点下面「退出游戏模式」；③ 控制中心磁贴。</string>
+    <string name="notif_action_exit">退出游戏模式</string>
+    <string name="tile_label">游戏模式</string>
+
+    <string name="tuning_title">边缘区域与验证模式</string>
+    <string name="tuning_hint" formatted="false">区比例 = 屏幕高度的百分比（2% ~ 30%）。只拦这些极边缘区域，音游中间判定区不受影响。</string>
+    <string name="tuning_top">顶部屏蔽区</string>
+    <string name="tuning_bottom">底部屏蔽区</string>
+    <string name="tuning_verify">验证模式：只打日志、不拦截（先日志后拦截）</string>
+    <string name="tuning_launcher">策略 B：在 Launcher 进程拦底部手势（需手工扩展作用域，实验性）</string>
+    <string name="tuning_saved">已保存并推送到 SystemUI</string>
+
+    <string name="preset_needs_foreground">还没拿到前台应用：先切到目标音游、或在状态卡看到“最近前台”后再点一次。</string>
+    <string name="preset_applied">已对 %1$s 启用「屏蔽顶部下拉 + 底部上滑」，左右返回保持原设置。</string>
 </resources>

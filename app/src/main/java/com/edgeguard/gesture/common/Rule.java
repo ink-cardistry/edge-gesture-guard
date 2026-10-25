@@ -10,8 +10,14 @@ import org.json.JSONObject;
  *  - activityName == null 表示"包级规则"（该应用的所有界面）；
  *  - activityName != null 表示"Activity 级规则"（只对该界面生效，优先级高于包级规则）。
  *
- * 控制器 UI 默认编辑包级规则；Activity 级规则由同一份存储/IPC 结构支持，
- * 后续要加"仅当前 Activity"功能只需在 UI 侧补充写入即可，Hook 端无需改动。
+ * 四个屏蔽位：
+ *  - blockLeft  / blockRight ：左/右边缘返回（A12-A17 均已在 SystemUI 内实现）；
+ *  - blockTopShade          ：顶部下拉通知栏（在 SystemUI 的 shade 触摸链上拦截）；
+ *  - blockBottom            ：底部上滑（A16/17 的底部手势由 Launcher 执行，
+ *                             本模块按"策略 A：坐标区域判断"尽力拦截，可能不可用）。
+ *
+ * 新增字段全部走 JSON 的可选键（"top" / "bottom"），旧版本规则表照常解析，
+ * 缺省 = false（安全默认：不屏蔽）。
  */
 public final class Rule {
 
@@ -22,15 +28,24 @@ public final class Rule {
     public final boolean blockLeft;
     public final boolean blockRight;
     public final boolean blockBottom;
+    public final boolean blockTopShade;
 
+    /** 兼容旧调用点（4 个屏蔽位）：顶部下拉默认关闭。 */
     public Rule(String packageName, String activityName,
                 boolean blockLeft, boolean blockRight, boolean blockBottom) {
+        this(packageName, activityName, blockLeft, blockRight, blockBottom, false);
+    }
+
+    public Rule(String packageName, String activityName,
+                boolean blockLeft, boolean blockRight, boolean blockBottom,
+                boolean blockTopShade) {
         this.packageName = packageName == null ? "" : packageName;
         String act = activityName;
         this.activityName = (act == null || act.length() == 0) ? null : act;
         this.blockLeft = blockLeft;
         this.blockRight = blockRight;
         this.blockBottom = blockBottom;
+        this.blockTopShade = blockTopShade;
     }
 
     public boolean isPackageLevel() {
@@ -38,7 +53,7 @@ public final class Rule {
     }
 
     public boolean blocksAnything() {
-        return blockLeft || blockRight || blockBottom;
+        return blockLeft || blockRight || blockBottom || blockTopShade;
     }
 
     public String key() {
@@ -60,6 +75,7 @@ public final class Rule {
         o.put("left", blockLeft);
         o.put("right", blockRight);
         o.put("bottom", blockBottom);
+        o.put("top", blockTopShade);
         return o;
     }
 
@@ -79,11 +95,13 @@ public final class Rule {
         return new Rule(pkg, act,
                 o.optBoolean("left", false),
                 o.optBoolean("right", false),
-                o.optBoolean("bottom", false));
+                o.optBoolean("bottom", false),
+                o.optBoolean("top", false));
     }
 
     @Override
     public String toString() {
-        return key() + "[l=" + blockLeft + ",r=" + blockRight + ",b=" + blockBottom + "]";
+        return key() + "[l=" + blockLeft + ",r=" + blockRight
+                + ",b=" + blockBottom + ",t=" + blockTopShade + "]";
     }
 }

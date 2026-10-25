@@ -41,12 +41,18 @@ final class Diag {
             return;
         }
         try {
-            String value = "v=1.2.0"
+            String value = "v=1.5.1"
                     + ";ts=" + System.currentTimeMillis()
                     + ";edge=" + (HookRuntime.status.edgeHooked ? 1 : 0)
                     + ";legacy=" + HookRuntime.legacyHooks
                     + ";modern=" + HookRuntime.modernHooks
                     + ";bottom=" + HookRuntime.status.bottomState
+                    + ";bottomSeen=" + HookRuntime.bottomZoneSeen
+                    + ";bottomBlk=" + HookRuntime.bottomZoneBlocked
+                    + ";shade=" + HookRuntime.status.shadeState
+                    + ";shadeBlk=" + HookRuntime.shadeBlocked
+                    + ";armed=" + (ArmController.isArmed() ? 1 : 0)
+                    + ";topSeen=" + HookRuntime.topZoneSeen
                     + ";rules=" + (HookRuntime.rules == null ? 0 : HookRuntime.rules.size())
                     + ";fg=" + HookRuntime.status.foregroundStrategy;
             Settings.Global.putString(context.getContentResolver(), ModuleContract.DIAG_GLOBAL_KEY, value);

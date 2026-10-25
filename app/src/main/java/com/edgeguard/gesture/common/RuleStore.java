@@ -7,8 +7,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * App 侧规则持久化（SharedPreferences 里存整份 JSON）。
- * 写入后由调用方通过 {@link ModuleBroadcasts#pushRules(Context, RuleSet)} 推送给 SystemUI。
+ * App 侧规则持久化（SharedPreferences 里存整份 JSON，含全局 config）。
+ * 写入后由调用方通过 {@link ModuleBroadcasts#pushRules(Context, RuleSet)} 推送给 SystemUI / Launcher。
  */
 public final class RuleStore {
 
@@ -48,12 +48,21 @@ public final class RuleStore {
         }
     }
 
+    /** 覆盖某个应用的包级规则（顶部下拉默认关闭，保留旧调用点语义）。 */
+    public RuleSet setPackageRule(String packageName, boolean blockLeft, boolean blockRight,
+                                  boolean blockBottom) {
+        Rule existing = getPackageRule(packageName);
+        boolean top = existing != null && existing.blockTopShade;
+        return setPackageRule(packageName, blockLeft, blockRight, blockBottom, top);
+    }
+
     /**
-     * 覆盖某个应用的包级规则。三项全不勾 => 删除该应用的规则。
+     * 覆盖某个应用的包级规则。四项全不勾 => 删除该应用的规则。
      *
      * @return 更新后的完整规则表（调用方拿去广播）
      */
-    public RuleSet setPackageRule(String packageName, boolean blockLeft, boolean blockRight, boolean blockBottom) {
+    public RuleSet setPackageRule(String packageName, boolean blockLeft, boolean blockRight,
+                                  boolean blockBottom, boolean blockTopShade) {
         RuleSet current = load();
         List<Rule> list = new ArrayList<>();
         for (Rule r : current.all()) {
@@ -62,10 +71,18 @@ public final class RuleStore {
             }
             list.add(r);
         }
-        if (blockLeft || blockRight || blockBottom) {
-            list.add(new Rule(packageName, null, blockLeft, blockRight, blockBottom));
+        if (blockLeft || blockRight || blockBottom || blockTopShade) {
+            list.add(new Rule(packageName, null, blockLeft, blockRight,
+                    blockBottom, blockTopShade));
         }
-        RuleSet next = RuleSet.of(list);
+        RuleSet next = RuleSet.of(list, current.config());
+        save(next);
+        return next;
+    }
+
+    /** 只改全局配置（阈值 / 验证模式 / Launcher 开关），规则原样保留。 */
+    public RuleSet setConfig(ModuleConfig config) {
+        RuleSet next = load().withConfig(config == null ? ModuleConfig.DEFAULT : config);
         save(next);
         return next;
     }

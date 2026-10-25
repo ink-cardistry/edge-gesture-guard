@@ -31,7 +31,13 @@ public final class XposedEntry implements IXposedHookLoadPackage {
                 return;
             }
             if (!ModuleContract.SYSTEMUI_PACKAGE.equals(lpparam.packageName)) {
-                return;   // 作用域外，什么都不做
+                // 策略 B：只有用户手工把作用域扩展到桌面进程时，这里才会被调用。
+                // 代码路径与 SystemUI 完全独立（不装返回手势 / shade Hook），
+                // 且功能默认关闭（规则表里的 config.launcherBottom = false）。
+                if (ModuleContract.isLauncherPackage(lpparam.packageName)) {
+                    handleLauncherProcess(lpparam);
+                }
+                return;   // 其它进程：什么都不做
             }
             // 先无条件打日志：这是"LSPosed 到底有没有把模块派发进来"的唯一证据，
             // 任何提前 return 都必须在它之后，否则排查时会完全看不到痕迹。
@@ -100,6 +106,46 @@ public final class XposedEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             // 入口层再兜一层：绝不让异常冒泡影响 SystemUI 启动
             Logx.e("handleLoadPackage failed", t);
+        }
+    }
+
+    /**
+     * 策略 B（实验性）：运行在 Launcher 进程里，只做"底部上滑"这一件事。
+     *
+     * 与 SystemUI 路径完全隔离：
+     *  - 不装返回手势 Hook、不装 shade Hook、不写 Settings.Global 自检记录
+     *    （Launcher 没有 WRITE_SECURE_SETTINGS，写了也没用，还会污染 App 的自检判断）；
+     *  - 只装 LauncherBottomHooks + 复用同一套规则通道（广播/Provider/本地缓存）；
+     *  - 是否真的拦截由 config.launcherBottom 决定，默认 false = 只挂不打。
+     *
+     * 可用性结论只能从 logcat 看（[LAUNCHER] 前缀）：挂载数量、是否拿到 finishInputEvent。
+     */
+    private static void handleLauncherProcess(XC_LoadPackage.LoadPackageParam lpparam) {
+        try {
+            Xlog.step("[LAUNCHER] dispatched, pkg=" + lpparam.packageName
+                    + ", process=" + lpparam.processName + ", v=" + HookRuntime.status.moduleVersion);
+            String processName = lpparam.processName;
+            if (processName != null && !processName.equals(lpparam.packageName)) {
+                // :trampoline / :quickstep 之类的子进程没有 TouchInteractionService 实例
+                Xlog.step("[LAUNCHER] 子进程 " + processName + " 跳过 Hook");
+                return;
+            }
+            int count = 0;
+            try {
+                count = LauncherBottomHooks.install(lpparam.classLoader);
+            } catch (Throwable t) {
+                Logx.e("[LAUNCHER] install failed", t);
+            }
+            Xlog.step("[LAUNCHER] hooks=" + count
+                    + " enabled=" + (HookRuntime.config != null && HookRuntime.config.launcherBottom));
+            Context context = Ctx.appContext();
+            if (context != null) {
+                initPipe(context);
+            } else {
+                scheduleContextRetry(0);
+            }
+        } catch (Throwable t) {
+            Logx.e("[LAUNCHER] handleLauncherProcess failed", t);
         }
     }
 

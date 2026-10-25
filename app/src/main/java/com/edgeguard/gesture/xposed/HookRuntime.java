@@ -2,13 +2,15 @@ package com.edgeguard.gesture.xposed;
 
 import android.content.Context;
 
+import com.edgeguard.gesture.common.Logx;
+import com.edgeguard.gesture.common.ModuleConfig;
 import com.edgeguard.gesture.common.RuleSet;
 import com.edgeguard.gesture.common.StatusReport;
 
 /**
- * Hook 进程内的共享状态（只在 SystemUI 进程里存在）。
+ * Hook 进程内的共享状态（SystemUI 进程，以及可选的 Launcher 进程各有一份）。
  *
- * rules 是 volatile 的不可变整表引用：触摸回调里只做一次引用读取 + map 查询，
+ * rules / config 都是 volatile 的不可变整表引用：触摸回调里只做一次引用读取 + map 查询，
  * 没有锁、没有 IO，不会拖慢手势。
  */
 final class HookRuntime {
@@ -25,11 +27,35 @@ final class HookRuntime {
     static final boolean DEBUG = false;
 
     static volatile RuleSet rules = RuleSet.EMPTY;
+
+    /** 全局几何/调试配置（顶部/底部比例、验证模式、Launcher 开关）。 */
+    static volatile ModuleConfig config = ModuleConfig.DEFAULT;
+
+    /**
+     * 是否需要"按事件观测区域"。
+     *
+     * 只有存在底部/顶部规则、或打开了验证模式时才为 true ——
+     * 否则热路径连 rawY 都不读，等同于模块没安装。
+     */
+    static volatile boolean observeZones;
+
     static final StatusReport status = new StatusReport();
 
     /** 已挂载的入口数量（写进自检记录，App 侧可读）。 */
     static volatile int legacyHooks;
     static volatile int modernHooks;
+
+    // ---- 观测计数（输入线程写，状态上报线程读；只用于诊断，不需要精确）----
+    /** 在"返回手势输入通道"上观测到的底部区域 DOWN 事件数 */
+    static volatile int bottomZoneSeen;
+    /** 其中真正被吞掉的 */
+    static volatile int bottomZoneBlocked;
+    /** 在任意 Hook 上观测到的顶部区域 DOWN 事件数 */
+    static volatile int topZoneSeen;
+    /** 通知栏下拉被拦截的次数 */
+    static volatile int shadeBlocked;
+    /** 通知栏 Hook 收到的事件数 */
+    static volatile int shadeSeen;
 
     private HookRuntime() {
     }
@@ -41,6 +67,31 @@ final class HookRuntime {
             return context;
         }
         return pipeContext;
+    }
+
+    /** 规则表或配置变化后重算派生状态（App 进程每次推送都会调用，代价可忽略）。 */
+    static void refreshDerived() {
+        try {
+            RuleSet set = rules;
+            ModuleConfig cfg = config;
+            boolean observe = cfg != null && cfg.verifyOnly;
+            if (!observe && set != null) {
+                for (com.edgeguard.gesture.common.Rule r : set.all()) {
+                    if (r.blockBottom || r.blockTopShade) {
+                        observe = true;
+                        break;
+                    }
+                }
+            }
+            observeZones = observe;
+        } catch (Throwable t) {
+            Logx.w("refreshDerived failed", t);
+        }
+    }
+
+    static boolean verifyMode() {
+        ModuleConfig cfg = config;
+        return cfg != null && cfg.verifyOnly;
     }
 
     static void noteForeground(String strategy, String error) {

@@ -37,6 +37,10 @@ public final class SyncReceiver extends BroadcastReceiver {
             RuleSet rules = new RuleStore(context).load();
             ModuleBroadcasts.pushRules(context, rules);
             Logx.i("SyncReceiver pushed " + rules.size() + " rules after " + action);
+            if (Intent.ACTION_BOOT_COMPLETED.equals(action)) {
+                // 游戏模式是"会话"，不跨重启：SystemUI 侧已复位，这里把 App 缓存与通知清掉
+                ArmClient.clearOnBoot(context);
+            }
         } catch (Throwable t) {
             Logx.w("SyncReceiver failed", t);
         }

@@ -6,11 +6,13 @@ LSPosed 模块：**按前台应用 / Activity 动态屏蔽「左边缘返回」�
 | 项 | 值 |
 |---|---|
 | 模块包名 | `com.edgeguard.gesture` |
-| LSPosed 作用域 | **只需要 System UI（`com.android.systemui`）** |
+| LSPosed 作用域 | **必需：System UI（`com.android.systemui`）**；可选：Launcher（仅策略 B，默认关闭） |
 | Hook 入口类 | `com.edgeguard.gesture.xposed.XposedEntry`（`assets/xposed_init`） |
 | 日志 TAG | `EdgeGestureGuard` |
-| 已构建产物 | `dist/EdgeGestureGuard-1.3.0-debug.apk`（debug 签名，61 KB，MD5 `3342fe761017832942df4f5c4f848e31`）|
+| 已构建产物 | `dist/EdgeGestureGuard-1.5.1-debug.apk`（debug 签名；MD5 见第 16 节构建表）|
 | 真机验证 | **LineageOS 24 / Android 17 (SDK 37) 实测通过**：左右返回屏蔽生效 |
+| 1.4.0 新增 | 顶部通知栏下拉屏蔽（SystemUI 内）；底部上滑策略 A 坐标判断 + 自检计数；策略 B（Launcher 进程，默认关）；音游快捷预设 |
+| **1.5.0 新增** | **游戏模式会话**（寄生通知 / 控制中心磁贴开启，**锁屏后解锁自动退出**）；状态卡改为「摘要 + 可折叠详情」 |
 
 ### 0.1 真机实测结论（LineageOS 24 / Android 17）
 
@@ -19,11 +21,13 @@ AOSP 16/17 的手势层与网上多数资料（A12–A15 写法）差别很大�
 | 环节 | 真实类/方法 | 说明 |
 |---|---|---|
 | 手势输入 | `InputChannelCompat$InputEventReceiver$1#onInputEvent(InputEvent)` | 继承 `android.view.InputEventReceiver`，持 `val$listener`；**必须**在它上面调 `finishInputEvent(event, true)`，否则输入通道会卡住 |
-| 通道过滤 | `val$listener` 的类名含 `DisplayBackGestureHandlerImpl` | 同一个 receiver 类也被导航条 home handle 等复用，不能无条件拦 |
+| 通道过滤 | `val$listener` 类名命中 `DisplayBackGestureHandlerImpl` / `EdgeBackGestureHandler`（1.5.1 起两者都接受） | 同一个 receiver 类也被导航条 home handle 等复用，不能无条件拦 |
 | 执行返回 | `EdgeBackGestureHandler$5#triggerBack(boolean)` | `mBackCallback` 字段的类型；A17 里**不是** `onBackInvoked` |
 | 左右判定 | `EdgeBackGestureHandler.mIsOnLeftEdge` | 在 callback 里通过 `this$0` 拿到 handler 再读 |
 | 旧入口 | `EdgeBackGestureHandler#onMotionEvent` | **A17 已删除**，仅 A12–A15 有效 |
 | Context | `ActivityThread.getSystemContext()` → `createPackageContext("com.android.systemui")` | 早期写 `Settings.Global` 必须用包名与 uid 匹配的 context，否则报 `SecurityException: Given calling package android does not match caller's uid` |
+| 通知栏下拉 | SystemUI 的 shade 触摸链（`NotificationShadeWindowView` / 面板控制器 / `ShadeTouchEventHandler`） | **在 SystemUI 内**，可 Hook；但类名随 A14/15/16 重构挪过包，本版按多候选探测（见第 13 节） |
+| 底部上滑 | `com.android.quickstep.TouchInteractionService`（**Launcher 进程**）+ `InputManager.monitorGestureInput()` | **不在 SystemUI**；SystemUI 侧只能靠"返回手势 gesture monitor 是否也能收到该事件"来赌（第 12 节，本版给出实测判定方法） |
 
 实测日志（LSPosed 模块日志 `modules.log`）：
 
@@ -80,7 +84,8 @@ edge-gesture-guard/
 │       │   │   ├── Logx.java                   统一日志（TAG 固定）
 │       │   │   ├── ModuleContract.java         包名/action/authority/extra
 │       │   │   ├── Rule.java                   规则模型（包名+可选 Activity+3 个布尔）
-│       │   │   ├── RuleSet.java                不可变规则表 + 决策
+│       │   │   ├── RuleSet.java                不可变规则表 + 决策（含全局 config）
+│       │   │   ├── ModuleConfig.java           顶部/底部区比例、验证模式、Launcher 开关
 │       │   │   ├── StatusReport.java           Hook 状态报告
 │       │   │   ├── RuleStore.java              App 侧 SharedPreferences 持久化
 │       │   │   ├── ModuleBroadcasts.java       IPC 发送封装
@@ -95,7 +100,12 @@ edge-gesture-guard/
 │       │   │   ├── RulesPipe.java              广播 / Provider / 本地缓存
 │       │   │   ├── HookRuntime.java            进程内共享状态
 │       │   │   ├── HookStatus.java             状态快照
-│       │   │   └── Reflect.java                反射工具箱
+│       │   │   ├── Reflect.java                反射工具箱
+│       │   │   ├── Targets.java                Hook 目标候选表（唯一名字清单）
+│       │   │   ├── Zones.java                  顶部/底部区域判定（屏幕高度缓存）
+│       │   │   ├── InputSink.java              finishInputEvent 收尾（返回/底部共用）
+│       │   │   ├── ShadeHooks.java             通知栏下拉 Hook（多候选类 + 探测日志）
+│       │   │   └── LauncherBottomHooks.java    策略B：Launcher 进程底部 Hook（默认关）
 │       │   └── app/                            # 控制器 UI
 │       │       ├── MainActivity.java
 │       │       ├── AppListAdapter.java
@@ -185,11 +195,23 @@ sh tools/build-local.sh
 ## 4. 使用
 
 1. 搜索框输入应用名/包名；勾「包含系统应用」可看到系统组件。
-2. 点一行展开，三个复选框：屏蔽左边缘返回 / 屏蔽右边缘返回 / 屏蔽底部上滑手势
-   （当前环境不支持底部时会置灰并提示）。
+2. 点一行展开，四个复选框：
+   - 屏蔽左边缘返回 / 屏蔽右边缘返回（SystemUI 内，可靠性最高）；
+   - **屏蔽顶部下拉通知栏**（SystemUI 内，见第 13 节）；
+   - **屏蔽底部上滑（实验性）**（见第 12 节：能不能生效由状态卡的 `seen=` 实测计数决定）。
+   复选框始终可点 —— 即使当前没探测到入口也允许你先配好规则，真实是否生效看状态卡，不看复选框。
 3. 勾选即保存 + 立刻广播给 SystemUI，**下一次触摸即生效**（不用重启应用或 SystemUI）。
-4. 三个都不勾 = 删除该应用规则 = 恢复系统默认。
+4. 四个都不勾 = 删除该应用规则 = 恢复系统默认。
 5. 切换应用立即按新应用自身规则生效。
+6. 底部工具条：
+   - **音游预设（顶+底）**：对"最近前台应用"一键打开顶部下拉 + 底部上滑，**左右返回保持原设置**；
+   - **阈值/验证**：调顶部/底部区比例（2%~30%）、打开「验证模式（只记日志不拦截）」、
+     打开「策略 B（Launcher 进程拦底部，需手工扩展作用域）」。
+7. **游戏模式（1.5.0，会话式）**：不用逐个勾应用，从「常驻通知按钮 / 控制中心磁贴 / 控制器里的
+   「游戏模式」按钮」任意一个入口打开，顶部下拉 + 底部上滑就对**所有应用**生效；
+   **锁屏后再解锁会自动退出**。详见第 15 节。
+8. **状态卡默认折叠**：只显示 3 行摘要（左右/顶部/底部状态 + 游戏模式 + 前台 + 告警数），
+   点「详情 ▾」才展开 200dp 的可滚动详情 —— 不会再把你下面的应用列表顶出屏幕。
 
 规则同时支持 Activity 级（Activity 级优先于包级）：
 
@@ -215,6 +237,9 @@ UI 目前编辑包级规则；Activity 级规则模型、IPC、匹配逻辑都�
 | 1b | 左右返回（A16/A17 输入层） | ① 直接加载 `com.android.systemui.shared.system.InputChannelCompat$InputEventReceiver$1`；② 从包装类 `InputChannelCompat$InputEventReceiver` 的内部类里找带 `val$listener` 的子类 | `onInputEvent(InputEvent)`，按 `val$listener` 类型名过滤（只处理返回手势通道） | 在该 receiver 实例上调 `finishInputEvent(event,true)` 后再阻止原逻辑 | finish 失败 → 撤销屏蔽、放行（宁可不生效也不卡输入） |
 | 1c | 左右返回（A16/A17 执行层，最终兜底） | 读 `EdgeBackGestureHandler.mBackCallback` 的字段类型（`EdgeBackGestureHandler$5`），内部类兜底搜索 | `triggerBack(boolean)`（A17 真实触发点；`onBackInvoked` 仅作兼容候选） | 命中规则 → `param.setResult(null)` 不调用原方法；左右由 `this$0.mIsOnLeftEdge` 判定 | 读不到 `mIsOnLeftEdge` → 不屏蔽（安全默认） |
 | 2 | 边缘宽度 / 屏幕宽度 | 反射 `mEdgeWidthLeft/mEdgeWidthRight/mBackGestureInsets/mDisplayWidth/mDisplaySize(Point)`；新架构匿名类再往 `this$0` 找 `displaySize` | 只读 | 新架构改用 gesture monitor 语义（事件本身就在边缘区）按屏幕左右半区判定 | 兜底 `max(24dp, config_backGestureInset, 宽 4%)`，宁窄勿宽 |
+| 5 | **顶部下拉通知栏（功能二）** | 多候选类名加载（`shade.NotificationShadeWindowView` / `shade.NotificationShadeWindowViewController` / `shade.NotificationPanelViewController` / `statusbar.phone.NotificationPanelViewController` / `shade.ShadeTouchEventHandler` / `statusbar.phone.PhoneStatusBarView` / `statusbar.phone.StatusBarTouchHandler`），类内扫 `onInterceptTouchEvent` `onTouchEvent` `dispatchTouchEvent` `handleDispatchTouchEvent` `shouldInterceptTouchEvent` `handleTouchEvent` `onQsIntercept` `handleMotionEvent` `onMotionEvent`（含无参 `onQsIntercept()`） | 谁存在挂谁（多个类都挂，互不冲突） | 命中「规则.blockTopShade + 起手 rawY 在顶部区 + 通知栏未展开」→ 整条事件流不喂原方法、`setResult(true)` | 一个候选都没挂上 → `shadeState=unsupported`，UI 明说"不生效"；`shade candidates` 日志列出每个候选的探测结果 |
+| 6 | **底部上滑（功能一，策略 A）** | 复用 1b 的返回手势 gesture monitor 通道，额外读 `rawY` 判底部区（`WindowManager.getCurrentWindowMetrics()`，公开 API） | 不新增 Hook 点，只在既有回调里加坐标判断 | 命中「规则.blockBottom + 起手 rawY 在底部区」→ 与左右返回同一套 `finishInputEvent` 吞流 | **输入通道收不到底部事件时 seen=0**：状态卡直接写"策略 A 不可用"，绝不假装生效；此时只能走策略 B |
+| 7 | 底部上滑（功能一，策略 B，默认关） | 仅在 Launcher 进程被 LSPosed 注入时：`Targets.LAUNCHER_TOUCH_CLASSES`（`quickstep.TouchInteractionService` 等）+ 其内部类 | `onInputEvent` / `onMotionEvent` / `handleMotionEvent` / `dispatchTouchEvent` / `onTouchEvent` | 命中「`config.launcherBottom` + 规则.blockBottom + 起手在底部区」→ `finishInputEvent` 后吞流 | 拿不到 `finishInputEvent`（入口是 listener）→ 明确放弃并只记一条日志，防止输入卡死 |
 | 3 | 底部手势 | ① 类名提示 `HomeHandle`；② 字段类型扫描 | 同上（只接受 SystemUI 自己声明的方法） | 同一套闸门（`blockBottom`） | 探测不到 → `unsupported`，UI 置灰 + 明确提示降级 |
 | 4 | 前台应用 | `ActivityTaskManager` 反射 → 无障碍推送 → `UsageStatsManager` | `getFocusedRootTaskInfo` / `getTasks(…)` 多形态 + `queryEvents` | 400ms 缓存 + 失败冷却；拿不到 → 不屏蔽 | 三档全失败 → 安全默认"不屏蔽" |
 
@@ -242,14 +267,17 @@ UI 目前编辑包级规则；Activity 级规则模型、IPC、匹配逻辑都�
 
 ## 6. 已支持的 AOSP 版本范围
 
-| Android | API | 左右返回屏蔽 | 底部手势屏蔽 | 说明 |
-|---|---|---|---|---|
-| 12 / 12L | 31 / 32 | ✅ 预期可用 | ⚠️ 基本不可用 | `edgeback` 在 `navigationbar.gestural` |
-| 13 | 33 | ✅ 预期可用 | ⚠️ 基本不可用 | 同上 |
-| 14 | 34 | ✅ 预期可用 | ⚠️ 基本不可用 | 同上 |
-| 15 | 35 | ✅ 预期可用 | ⚠️ 基本不可用 | 同上 |
-| 16 | 36 | ✅ 已按新架构适配 | ⚠️ 基本不可用 | `onMotionEvent` 已删除，走 InputEventReceiver |
-| 17 | 37 | ✅ 已实测确认新架构类存在 | ⚠️ 基本不可用 | 见下节 |
+| Android | API | 左右返回屏蔽 | 顶部下拉屏蔽 | 底部上滑屏蔽 | 说明 |
+|---|---|---|---|---|---|
+| 12 / 12L | 31 / 32 | ✅ 预期可用 | ✅ 预期可用 | ⚠️ 走策略 B | `edgeback` 在 `navigationbar.gestural`；shade 类在 `statusbar.phone` |
+| 13 | 33 | ✅ 预期可用 | ✅ 预期可用 | ⚠️ 走策略 B | 同上 |
+| 14 | 34 | ✅ 预期可用 | ✅ 预期可用 | ⚠️ 走策略 B | shade 已挪到 `com.android.systemui.shade` |
+| 15 | 35 | ✅ 预期可用 | ✅ 预期可用 | ⚠️ 走策略 B | 触摸逻辑逐步抽到 `ShadeTouchEventHandler` |
+| 16 | 36 | ✅ 已按新架构适配 | ✅ 预期可用（多候选） | ⚠️ 策略 A 待实测 | `onMotionEvent` 已删除，走 InputEventReceiver |
+| 17 | 37 | ✅ 已实测确认新架构类存在 | ✅ 已按多候选实现（结果看 `shade=` 日志/状态卡） | ⚠️ 策略 A 由 seen= 计数判定 | 见第 12/13 节 |
+
+> 本表的"✅"只表示**代码路径已实现且探测到入口**；是否能拦住在 A17 上必须用第 14 节的
+> "先日志、后拦截"流程实测确认。本模块刻意不把"预期可用"写成"已支持"。
 
 > 判定标准：状态卡里 **「新架构 InputEventReceiver: ≥1 个入口」** 即为挂载成功。
 > 本模块不猜、不假装成功；探测不到就明确显示 0。
@@ -277,12 +305,15 @@ Lcom/android/systemui/navigationbar/gestural/DisplayBackGestureHandlerImpl$input
    M onInputEvent(view/InputEvent)V
 ```
 
-即：AOSP 16/17 把返回手势改成 **每 display 一个 `DisplayBackGestureHandlerImpl`，
-用 `InputMonitorCompat` 拿 gesture monitor，再用 `InputEventReceiver` 收事件**。
-1.0.0 只挂 `EdgeBackGestureHandler.onMotionEvent`，这个方法在本版已不存在 →
+即：返回手势改成 **每 display 一个 handler，用 `InputMonitorCompat` 拿 gesture monitor，
+再用 `InputEventReceiver` 收事件**。本机（LineageOS 24）里这个 handler 叫
+`DisplayBackGestureHandlerImpl`；AOSP main 的对应实现是 `EdgeBackGestureHandler`
+（注册的 monitor 名是 `edge-swipe`，且**不设区域 = 整屏监视**）。1.5.1 已把 listener 过滤
+放宽为同时接受这两个命名，避免换 ROM 后"一个都挂不上"。
+1.0.0 只挂 `EdgeBackGestureHandler.onMotionEvent`，该方法在 A17 已不存在 →
 `edgeHooked=false` → 表现就是"勾了完全没效果"。1.1.0 已改为双架构同时挂载。
 
-**底部手势为什么多半不可用（重要，不忽悠）**
+**底部手势（1.3 时期的结论，1.4/1.5 已给出分层方案，见第 12 节）**
 
 AOSP 手势导航的「上滑回桌面 / 上滑悬停进最近任务」由
 `com.android.launcher3 / com.android.quickstep.TouchInteractionService` 通过
@@ -290,14 +321,18 @@ AOSP 手势导航的「上滑回桌面 / 上滑悬停进最近任务」由
 SystemUI 里只有导航键层与 home handle 小胶囊（`HomeHandle` 的触摸只影响胶囊自身
 拖拽/长按动画，不是上滑 Home）。
 
-因此：
+所以自 1.4.0 起不再靠"猜 SystemUI 里的入口"，而是分三层（细节见第 12 节）：
 
-- 若 ROM 把底部手势做进了 SystemUI（部分 OEM/定制 ROM），探测到入口就挂载，状态卡显示「已挂载」；
-- stock AOSP / LineageOS 上探测不到 → 状态卡显示
-  **「当前环境不支持底部手势屏蔽 → 已降级为仅左右返回屏蔽」**，对应复选框置灰。
+- **策略 A**：复用返回手势的 gesture monitor 通道 + 按 `rawY` 判底部区。
+  AOSP 源码已证实该 monitor 是**整屏监视**，所以底部触摸**会**进来；
+  能否真正拦住取决于"消费后 Launcher 的 monitor 是否仍执行 Home"，由状态卡的
+  `seen=/blocked=` 与实测定论。
+- **策略 B**：可选地把作用域扩展到 Launcher，挂 `InputChannelCompat$InputEventReceiver$1`
+  （TIS 自己只是 listener，消费不了事件），**默认关闭、需两个显式开关**。
+- **策略 C**：两条都不成立时，状态卡与 UI 直接写"当前架构下底部上滑屏蔽不可用"。
 
-**不做的事**：不会为了"看起来支持"去 Hook Launcher 进程（违反作用域约束），
-也不会用强制 Hook 赌 SystemUI 崩溃。
+**不做的事**：不会在用户没有"显式勾选 Launcher 作用域 + 打开策略 B/游戏模式"的情况下
+去 Hook Launcher 进程，也不会用强制 Hook 赌 SystemUI 崩溃。
 
 ---
 
@@ -397,8 +432,10 @@ BLOCK LEFT gesture, foreground=com.xxx/com.xxx.MainActivity [atm:getTasks4]
 
 ## 11. 已知限制（明确列出，不粉饰）
 
-1. **底部上滑**：AOSP/LineageOS 由 Launcher3 处理，SystemUI 单进程 Hook 无法保证拦截；
-   默认降级为仅左右返回（状态卡会明确显示）。
+1. **底部上滑**：AOSP/LineageOS 由 Launcher3/Quickstep 处理，SystemUI 单进程 Hook 无法保证拦截。
+   本版新增"策略 A：在返回手势 gesture monitor 通道上按 rawY 判底部区"，但**它是否真的能看到
+   底部触摸由系统决定**：状态卡的 `seen=` 计数为 0 就说明看不到，此时该功能在本机不可用
+   （明确降级，不假装生效）。真正可靠的路径是策略 B（扩展到 Launcher 作用域，默认关闭）。
 2. 前台应用检测依赖 SystemUI 进程权限；ActivityTaskManager / UsageStats 都可能被拒，
    此时需启用无障碍助手（第三档）。
 3. 多窗口/分屏下"前台"语义模糊：取的是 display 0 最上层任务，可能与直觉不同。
@@ -408,6 +445,13 @@ BLOCK LEFT gesture, foreground=com.xxx/com.xxx.MainActivity [atm:getTasks4]
    （状态卡显示未挂载），请保持 LSPosed 默认设置。
 6. 不做「手势区域视觉提示」（不画额外箭头/高亮）。
 7. 只支持触摸屏；不支持外接鼠标/手写笔的特殊手势路径。
+8. **顶部下拉**：只在**屏幕顶部 topZoneRatio（默认 12%）内起手**的手势被拦；
+   从状态栏以下开始的下拉、以及"通知栏已展开后"的所有触摸都不拦（否则用户点不了通知）。
+   通知栏展开状态靠反射读 `isFullyExpanded/isExpanded/mExpanded*`；读不到时按"未展开"处理，
+   此时若"已展开 + 目标应用在前台"，顶部 12% 的点击可能被吞（日志里会有一条 WARN 提示）。
+9. 底部/顶部的区域比例是**屏幕高度百分比**；横屏、折叠屏、多窗口下"整屏高度"取
+   `getCurrentWindowMetrics()`，旋转后最多 60 秒内自动刷新（事件 rawY 超出缓存高度会立即重算）。
+10. 3 键导航/无手势导航的机型上，顶部下拉与底部区判断仍有意义，但边缘返回规则无效果。
 ---
 
 ## 6.2 省电优化（1.2.1）
@@ -456,3 +500,361 @@ SystemUI 启动
 [EdgeGestureGuard] task-stack listener registered
 [EdgeGestureGuard] foreground tracking: push mode (触摸路径零 Binder)
 ```
+
+---
+
+# 12. 底部上滑屏蔽（功能一）：可行性判定与分层策略
+
+## 12.1 架构事实（这是所有结论的前提）
+
+AOSP 16/17 手势导航里，两条手势的执行方**不是同一个进程**：
+
+| 手势 | 谁在执行 | 输入通道 |
+|---|---|---|
+| 左右边缘返回 | **SystemUI**（`DisplayBackGestureHandlerImpl` → `EdgeBackGestureHandler`） | `InputManager.monitorGestureInput()` 建的 gesture monitor + `InputEventReceiver` |
+| 底部上滑（Home / 最近任务） | **Launcher 进程**（`com.android.quickstep.TouchInteractionService`） | 同样是 `monitorGestureInput()`，但在 Launcher 进程里消费 |
+
+**结论 1：SystemUI 进程内没有"底部上滑"的最终执行逻辑。** 这是 AOSP 的分工，不是 LineageOS 的特性；
+所以"在 SystemUI 里 Hook 底部手势的最终执行"这条路在 A17 上不存在（旧版的 `EdgeBackGestureHandler.onMotionEvent`
+也已在 A17 删除）。
+
+**结论 2：类被复用 ≠ 通道被复用。** 你已有的模块观察到的
+"`InputChannelCompat$InputEventReceiver$1` 被导航条 home handle 等复用"说的是**同一个包装类**；
+但每个 gesture monitor 注册是**独立实例 + 独立区域**。返回手势的 monitor 只围绕"返回手势区"建立，
+它是否也会把底部区域的触摸送进来，**只能由实测回答，不能靠推测**。
+
+**结论 3（AOSP main 源码核对后补）：back 手势的 monitor 是「整屏监视」。**
+`EdgeBackGestureHandler` 用 `new InputMonitorCompat("edge-swipe", displayId)` → `monitorGestureInput(name, displayId)`
+（**不设区域**），再由 SystemUI 自己在 `onMotionEvent` 里用 `isWithinInsets && isWithinTouchRegion`
+过滤出左右边缘条带（并排除 PiP / navbar overlay / exclude region）。
+也就是说：**底部 home handle 区域的 ACTION_DOWN 会进入这条 monitor 的判断**，
+只是不满足边缘条带 → 不触发返回、事件继续正常分发。
+
+> 对策略 A 的意义：`seen > 0` 属于**预期结果**，不是侥幸。真正还没被源码证实的不确定项
+> 只剩一个 —— "SystemUI 消费之后，Launcher 自己的 monitor 是否仍会执行 Home"。
+
+## 12.2 策略 A（在既有 onInputEvent 里加坐标判断）——判定：**条件性可用，必须实测**
+
+实现方式（本版已落地，见 `HookLogic` 的 `KIND_EDGE` 分支）：
+
+```
+ACTION_DOWN 时
+  rawY = ev.getRawY()                     // 屏幕坐标
+  screenHeight = WindowManager.getCurrentWindowMetrics().getBounds().height()
+  inBottomZone = rawY >= screenHeight * (1 - bottomZoneRatio)   // 默认 12%
+  命中 = 规则.blockBottom && inBottomZone
+  命中 -> finishInputEvent(event, true) -> 不调用原方法（整条流按 downTime 吞掉）
+```
+
+**它"生效"的三个必要条件**（缺一即不可用）：
+
+1. 返回手势的 gesture monitor 收到了底部区域的触摸事件 —— **AOSP 源码已证实会收到**（整屏 monitor，见 12.1 结论 3）。
+   因此状态卡里的 `seen=` 应该 > 0；若仍为 0，说明这个 ROM 把 monitor 收窄了或换了类，看 logcat 再补候选。
+2. SystemUI 消费该事件后，Launcher 自己的 gesture monitor **不再执行 Home** ——
+   **这是目前唯一还没被源码证实的环节**（monitor 间消费是否互斥取决于 InputDispatcher 语义与 ROM 定制），
+   必须靠"上滑还回不回桌面"实测。
+3. `blockBottom` 规则 / 游戏模式 + 前台包名判定正常（复用左右返回那一套，无额外 IPC）。
+
+**验证方法（30 秒，不需要改代码）**
+
+```bash
+# 先打开验证模式：控制器 UI → 阈值/验证 → 勾"验证模式（只打日志、不拦截）"
+adb logcat -s EdgeGestureGuard | grep -E "ZONE |screen metrics"
+```
+
+然后在音游里**沿屏幕底部上滑**（起点要在最底部 12% 以内），观察是否出现：
+
+```
+ZONE EDGE action=DOWN rawY=2312 screenHeight=2400 inTopZone=false inBottomZone=true fg=com.xxx.game blocked=true -> BOTTOM(返回通道)
+```
+
+- **出现 `inBottomZone=true` 的行** → 策略 A 有条件可用：关掉验证模式，实测"上滑还回不回桌面"。
+  - 不回桌面 → 策略 A 成立，保持默认（只勾 SystemUI 作用域）即可；
+  - 仍回桌面 → 说明"监视器之间不互斥"，策略 A 无效 → 走策略 B。
+- **完全没有 ZONE 行 / 永远 `inBottomZone=false`** → 该通道看不到底部触摸，**策略 A 在本机不可用**。
+
+**状态卡上的判定**（读的是真实计数，不是猜测）：
+
+| 状态卡显示 | 含义 |
+|---|---|
+| `实测计数：seen=0 blocked=0` | 输入通道从未看到底部区域事件 → **策略 A 不可用** |
+| `seen>0 blocked=0` | 看得到但没命中（检查：前台包名？blockBottom 勾了吗？验证模式是否还开着？） |
+| `seen>0 blocked>0` | 已拦截，请实测上滑是否仍回桌面 |
+
+> 为什么不"强行"写一个看起来能用的 Hook：因为**若通道看不到底部事件，任何坐标判断都是死代码**。
+> 本模块的做法是"逻辑先装上（零成本）+ 计数自证 + UI 明说不生效"，让你一眼看出到底卡在哪一环。
+
+## 12.3 策略 B（扩展作用域到 Launcher）——**实验性，默认关闭**
+
+代码：`LauncherBottomHooks.java`（与 SystemUI 路径完全独立，不会互相影响）。
+
+**挂在哪一层（关键，按 AOSP main 核对结果修正）**
+
+| 位置 | 能不能消费事件 | 本模块怎么用 |
+|---|---|---|
+| `TouchInteractionService#onInputEvent(InputEvent)` | ❌ 它 `extends Service`，只是 `getInputReceiver(looper, choreographer, this::onInputEvent)` 里的 **listener**，没有 `finishInputEvent` | 只作**兜底探测**：拿不到 finish 就明确放弃，绝不卡输入 |
+| `InputChannelCompat$InputEventReceiver$1#onInputEvent` | ✅ 真正持有 `finishInputEvent`（Launcher 进程里同样存在） | **主力**：先挂它，命中就 finish + 吞流 |
+
+日志里用 `[LAUNCHER-RCVR]` 前缀区分主力通道，`[LAUNCHER]` 前缀是兜底通道。
+
+生效需要**两个显式条件同时满足**：
+
+1. **你在 LSPosed 里手工把作用域扩展到桌面包名**（清单里只预填了 SystemUI，不会替你扩）；
+2. **你在 UI 里勾选「策略 B：在 Launcher 进程拦底部手势」**（`config.launcherBottom`，默认 false）。
+
+步骤：
+
+```
+1) 确认桌面包名：adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN \
+       -c android.intent.category.HOME | tail -1        # 例如 com.android.launcher3 / com.miui.home
+2) LSPosed → 模块 → 边缘手势守卫 → 作用域 → 额外勾选该桌面包名
+3) 模块 UI → 阈值/验证 → 勾「策略 B」→ 保存
+4) 重启桌面进程（或重启手机），然后：
+   adb logcat -s EdgeGestureGuard | grep LAUNCHER
+```
+
+日志判读：
+
+```
+[LAUNCHER] dispatched, pkg=com.android.launcher3        # 模块确实被注入桌面进程
+hooked [LAUNCHER] TouchInteractionService#onInputEvent(InputEvent) returns void
+[LAUNCHER] 底部手势入口已挂载: 1 个
+```
+
+- 有 `[LAUNCHER] 入口不是 InputEventReceiver（拿不到 finishInputEvent）` →
+  **该 ROM 的入口是 listener，无法安全消费事件**，模块会主动放弃（保护输入通道不卡死）。
+  这条路在本机就到此为止，不要硬改。
+- `hooks=0` → 类名与候选不同，把 `[LAUNCHER]` 那几行贴出来补 `Targets.LAUNCHER_TOUCH_CLASSES`。
+
+**风险（务必知道）**：
+
+| 风险 | 后果 | 缓解 |
+|---|---|---|
+| Hook 桌面进程的输入入口 | 极端情况下桌面手势异常 / 桌面进程崩溃重启 | 全部 `try/catch(Throwable)`；出异常不 setResult，原逻辑照常跑；崩溃可在 LSPosed 里取消桌面作用域并从安全模式恢复 |
+| 拿不到 `finishInputEvent` | 若强行消费会**触摸卡死** | 拿不到就**放弃拦截**（代码里已强制），只打一条 WARN |
+| 拦截范围过宽 | 桌面/最近任务全部不能用 | 只在"前台命中 blockBottom + 起手在底部 12%"时拦；桌面自己在前台时不会命中规则 |
+| 规则没送到桌面进程 | 永远放行（等于没开） | `ModuleBroadcasts.pushRules` 会额外向 `ModuleContract.LAUNCHER_PACKAGES` 推一份；Provider 也放行了桌面 uid |
+
+## 12.4 策略 C（明确不支持的场景）
+
+- 只想保留单一 SystemUI 作用域、且 `seen=0` → **当前架构下底部上滑屏蔽不可用**，
+  状态卡与复选框提示都会这么写，不会给你"看起来能工作"的代码。
+- 3 键导航机型：本来就没有上滑手势，无需此功能。
+
+---
+
+# 13. 顶部通知栏下拉屏蔽（功能二）
+
+**作用域：仍然只需要 `com.android.systemui`**（shade 的触摸链全在 SystemUI 进程内）。
+
+## 13.1 拦截点
+
+`ShadeHooks` 会按候选表 `Targets.SHADE_TOUCH_CLASSES` 逐个 `Class.forName`（`findClassIfExists` 等价物），
+对存在的类扫 `onInterceptTouchEvent` / `onTouchEvent` / `dispatchTouchEvent` /
+`handleDispatchTouchEvent` / `shouldInterceptTouchEvent` / `handleTouchEvent` /
+`onQsIntercept` / `handleMotionEvent` / `onMotionEvent`，**谁存在挂谁**：
+
+| 候选类 | 出现版本 | 说明 |
+|---|---|---|
+| `com.android.systemui.shade.NotificationShadeWindowView` | A14+ | shade 窗口根 View，覆写 dispatch/onIntercept/onTouch，委托嵌套接口 `InteractionEventHandler` |
+| `com.android.systemui.shade.NotificationShadeWindowViewController` | A13+ | 实现 `InteractionEventHandler`：`handleDispatchTouchEvent` / `shouldInterceptTouchEvent` / `handleTouchEvent`（**真实逻辑在这层**） |
+| `com.android.systemui.shade.NotificationPanelViewController` | A14+ | 面板控制器，`onInterceptTouchEvent(MotionEvent)` / `onTouchEvent(MotionEvent)`（QS 在 `onTouchEvent` 内处理） |
+| `com.android.systemui.statusbar.phone.NotificationPanelViewController` | A12/13 | 老位置（commit `8a75e4922a` 于 2022-07 挪包） |
+| `com.android.systemui.statusbar.phone.PhoneStatusBarView` | A12+ | 状态栏本体（下拉起手区） |
+| `com.android.systemui.statusbar.phone.StatusBarTouchHandler` | — | 纯候选（main 上未证实存在，探测不到就跳过） |
+
+> **两处已核对的纠偏**：
+> 1. `com.android.systemui.shade.ShadeTouchEventHandler` **在 AOSP main 里不存在**。
+>    存在的是 `com.android.systemui.ambient.touch.ShadeTouchHandler`，属于 glanceable hub 的
+>    ambient-touch 体系，**不是** shade 下拉入口 —— 所以本版没有把它当主力候选。
+> 2. `onQsIntercept`（A13 时代的面板方法）在 15/16/17 main 上**未证实**仍存在；
+>    探测不到会自动跳过，不抛异常、不假装支持。
+
+判定（`beforeHookedMethod`）：
+
+```
+规则.blockTopShade && 起手 rawY <= screenHeight * topZoneRatio && 通知栏未展开
+  -> setResult(true)（不调用原方法），并按 downTime 吞掉整条流
+```
+
+## 13.2 已知限制（明确写出来）
+
+1. **只拦"起手就在顶部 12%"的手势**。从状态栏以下开始的下拉（例如从屏幕中部往上推再下拉）不拦。
+   注意：被拦的 DOWN 是**整条消费**的（这正是"不让面板状态机启动"的原因），所以
+   "目标应用在前台时，落在顶部 12% 内的**点击**也会被吞掉" —— 这是本方案的固有代价。
+   音游里顶部 12% 一般只有暂停/设置按钮，影响可控；介意就把 topZoneRatio 调小（最小 2%）。
+2. **通知栏已展开时一律不拦**（否则你点不了通知）。展开状态靠反射读
+   `isFullyExpanded/isExpanded/mIsExpanded/mExpandedFraction` 等；都读不到时按"未展开"处理，
+   并在日志里给一条 WARN。
+3. **不拦音量面板 / 电源菜单 / 快捷设置的下拉**（那些是其它窗口，不是 shade 触摸链）。
+4. 若某 ROM 把 shade 改成 scene 容器而没有上述任何触摸方法 → `shadeState=unsupported`，
+   UI 会明说"不生效"（此时本功能等同于关闭）。
+5. `onQsIntercept()` 无参版本没有 MotionEvent，只能靠"最近一次 DOWN 的判定"（3 秒内有效）。
+
+## 13.3 验证方法
+
+```bash
+adb logcat -s EdgeGestureGuard | grep -E "shade candidates|hooked \[SHADE\]|shade hooks|ZONE SHADE"
+```
+
+期望看到（示例）：
+
+```
+shade candidates on com.android.systemui.shade.NotificationShadeWindowView: 3
+hooked [SHADE] NotificationShadeWindowView#onInterceptTouchEvent(MotionEvent) returns boolean (带 MotionEvent)
+shade hooks: 3 个入口; 已挂载=NotificationShadeWindowView=3
+ZONE SHADE action=DOWN rawY=64 screenHeight=2400 inTopZone=true inBottomZone=false fg=com.xxx.game blocked=true -> TOP-SHADE
+```
+
+状态卡对应行：`· 通知栏下拉 Hook：已挂载` + 已挂载/候选缺失清单。
+**一个都没挂上**时状态卡写"未挂载（当前 ROM 上此项不生效）"，并把缺失的候选类名列出来。
+
+---
+
+# 14. 音游场景：推荐配置与调试步骤
+
+## 14.1 推荐配置（打音游的典型值）
+
+| 项 | 推荐 | 理由 |
+|---|---|---|
+| 左/右边缘返回 | **按需**（音游里有左右滑条时再开） | 有些音游左右滑动是操作，开了会误伤 |
+| 顶部下拉 | **开** | 音游判定区在下方，顶部 12% 基本不会用到；下拉会打断连击 |
+| 底部上滑 | **开（实验性）** | 拇指托在屏幕下沿时最容易误触 Home；是否能拦住看 `seen=` |
+| 顶部区比例 | **10%~12%** | 再大就会碰到游戏 UI 顶栏 |
+| 底部区比例 | **10%~12%** | 覆盖系统手势区即可，不要超过 15%（会碰判定线） |
+| 验证模式 | **先开，确认后再关** | 只看日志不动手，避免"以为生效了" |
+
+一键做法：切到音游（让它成为前台）→ 打开控制器 → 点 **「音游预设（顶+底）」**。
+它只改"最近前台应用"的顶部/底部两项，**不动左右**。
+
+## 14.2 调试步骤（先日志、后拦截）
+
+```
+1) 安装 1.4.0 → LSPosed 作用域只勾 System UI → 重启 SystemUI/手机
+   （装完新 APK 不要立刻重启：先打开一次 LSPosed Manager 让它登记新包，约 1 分钟后再重启）
+2) 打开控制器，确认状态卡：
+   · 左右返回 Hook：已挂载
+   · 通知栏下拉 Hook：已挂载
+   · 底部上滑（策略 A）：… + 实测计数
+3) 阈值/验证 → 勾「验证模式」→ 保存
+4) 进音游，分别做三种动作，看 logcat 的 ZONE 行：
+   - 顶部往下拉      → 期望 inTopZone=true
+   - 底部往上滑      → 期望 inBottomZone=true（若从来没有，策略 A 不可用）
+   - 左/右边缘返回    → 期望 inTopZone=false inBottomZone=false
+5) 三个坐标都对 → 关掉验证模式 → 再试：
+   - 顶部下拉是否还被拦下（应被拦）
+   - 底部上滑是否仍回桌面（仍回 → 换策略 B）
+   - 屏幕中部正常点按是否受影响（应完全不受影响）
+6) 若某一步不对，把 ZONE / BLOCK / shade 三组日志行贴出来即可定位（不需要改代码先猜）
+```
+
+## 14.3 性能与手感
+
+- 热路径（每次 DOWN）：读 2 个 volatile 字段（规则表 / 配置）+ 1 次 hash 查表 + 2 次浮点比较；
+  **没有 Binder、没有 IO、没有锁**（事件流表是 `ConcurrentHashMap` 无锁读）。
+- 无规则 / 前台不是目标应用时：`rules.size()==0` 或 `Decision.any()==false` 立即返回，等同于模块没启动。
+- 只有存在底部/顶部规则（或验证模式）时才做区域计数，平时连 `getRawY()` 都不读。
+- 屏幕高度缓存 60 秒；`rawY` 超出缓存高度（旋转/分辨率变化）时立即重算。
+---
+
+# 15. 游戏模式（1.5.0）：寄生通知 / 磁贴 / 锁屏自动退出
+
+## 15.1 为什么换了一套用法
+
+打音游的节奏是**一局一局**的：开局前要「现在开始防误触」，打完这一把就该恢复正常。
+让用户每换一个游戏都去列表里勾四个复选框，既慢又容易忘关（忘关的代价是日常完全没法下拉通知栏）。
+
+所以 1.5.0 增加一个**会话式总闸**，与原来的「按应用勾选」**并存**：
+
+| 模式 | 怎么开 | 作用范围 | 何时失效 |
+|---|---|---|---|
+| 常驻模式（1.3 起） | 应用列表里勾「顶部下拉 / 底部上滑」 | **只对勾选的应用** | 手动取消勾选 |
+| **游戏模式（1.5 新增）** | 通知按钮 / 磁贴 / 控制器「游戏模式」按钮 | **全局**（顶部下拉 + 底部上滑，**不含左右返回**） | **锁屏后解锁** / 通知按钮 / 磁贴 / 控制器按钮 / SystemUI 重启 |
+
+判定式：`是否屏蔽 = 该应用规则命中 || 游戏模式已开`
+
+左/右返回**不受游戏模式影响**：它一直是「按应用规则常驻」，老用户用法一个字都不用改。
+
+## 15.2 三个入口（等价，都只是「遥控器」）
+
+| 入口 | 怎么用 | 说明 |
+|---|---|---|
+| **寄生通知** | 开启后常驻一条低优先级通知，按钮「退出游戏模式」 | 用 `PendingIntent` 指向静态接收器，**App 进程被回收了也能点** |
+| **控制中心磁贴** | 下拉 QS → 编辑 → 添加「游戏模式」 | 磁贴标签随状态变：`游戏模式 已开` |
+| 控制器按钮 | App 内「游戏模式：已关（点此启用 顶+底）」 | 方便验证与排障 |
+
+> 磁贴需要你在控制中心里手动添加（系统不允许 App 自己加）。
+
+## 15.3 退出：主出口是锁屏（刻意设计）
+
+游戏模式会屏蔽**顶部下拉** —— 而通知栏、控制中心都在下拉里。也就是说：
+**开起来之后，通知按钮和磁贴这两条退出路很可能被自己堵住了。**
+
+所以主出口是锁屏：
+
+```
+开启游戏模式
+  → 打游戏
+  → 锁屏（SCREEN_OFF）
+  → 解锁（USER_PRESENT）
+  → 自动退出，系统手势全部恢复
+```
+
+实现要点（`ArmController`，**跑在 SystemUI 进程里**）：
+
+| 事件 | 动作 |
+|---|---|
+| `ACTION_SCREEN_OFF` 且当前已开启 | 打脏标记 `sawScreenOff = true` |
+| `ACTION_USER_PRESENT`（解锁完成）且脏标记为真 | `disarm(auto: lock -> unlock)` + 回推状态给 App |
+| `ACTION_SCREEN_ON` | 不处理（真正的「解锁完成」是 `USER_PRESENT`） |
+
+**为什么状态放在 SystemUI 而不是 App 的 SharedPreferences**：SystemUI 常驻，锁屏/解锁广播一定收得到；
+App 随时可能被冻结或杀死。放 App 会出现「已经锁屏解锁了但 SystemUI 还在拦」的鬼状态。
+App 侧只缓存「最近一次已知状态」用来画磁贴/通知。
+
+**会话不跨重启**：SystemUI 重启天然复位；`BOOT_COMPLETED` 时 App 侧也会清掉缓存与通知，
+避免磁贴显示「已开」但实际没拦。
+
+## 15.4 三条安全阀（防止把自己锁死）
+
+1. **前台未知 → 不拦**（fail-open）：拿不到前台包名时，游戏模式不作用于任何触摸。
+2. **前台是本模块控制器 → 不拦**：保证你总能打开 App 把游戏模式关掉。
+3. **锁屏永远可达**：即使通知/磁贴被自己屏蔽了，锁屏→解锁一定能把状态清掉。
+
+## 15.5 权限与可见性
+
+| 项 | 需要什么 | 没有会怎样 |
+|---|---|---|
+| 常驻通知 | `POST_NOTIFICATIONS`（API 33+ 运行时授权，App 首次启动会请求） | 通知不显示；**磁贴与锁屏退出仍然可用** |
+| QS 磁贴 | 无额外权限，需在控制中心手动添加 | — |
+| 锁屏退出 | 无 | — |
+
+## 15.6 排障
+
+| 现象 | 原因 / 处理 |
+|---|---|
+| 状态卡显示「SystemUI 里仍在运行 v1.2.0」 | **新代码还没进 SystemUI**：装完 APK → 打开一次 LSPosed Manager 让它登记新包 → 约 1 分钟后重启手机（或 root 下 `killall com.android.systemui`） |
+| 状态卡「通知栏下拉 Hook：未挂载」且自检记录是旧版本 | 同上：旧版本里根本没有这道 Hook，先让新版本生效再判断 |
+| 底部「实测计数：无」 | 旧版本不带该字段；1.5.x 生效后显示 `seen=N blocked=N` |
+| 通知不出现 | 检查系统设置里本 App 的通知权限（API 33+ 需允许）；渠道名「游戏模式」 |
+| 磁贴找不到 | 下拉控制中心 → 编辑（铅笔）→ 把「游戏模式」拖进可见区域 |
+| 游戏模式开了但没效果 | logcat 看两行：`GAME MODE ON` 与 `BLOCK ... armed=true`；只有前者说明顶部/底部 Hook 没挂上（看状态卡） |
+| 想确认锁屏退出 | logcat：`GAME MODE ON` → 锁屏 → 解锁 → `GAME MODE OFF (auto: lock -> unlock)` |
+---
+
+# 16. 1.5.1 构建验证（本机实跑）
+
+| 步骤 | 工具 | 结果 |
+|---|---|---|
+| 资源编译/链接 | `aapt2 16.0.0.4` | 通过（`versionCode=18` / `versionName=1.5.1`） |
+| Java 编译 | `javac 17.0.20` + `android-35.jar` + `api-82.jar` + `hidden-stub.jar` | 通过，**0 error** |
+| dex | `d8.jar`（build-tools 35，`--min-api 30`） | 通过 |
+| 打包/签名 | `uber-apk-signer 1.3.0` | v3 签名验证通过，0 errors |
+| 结构校验 | `tools/verify-apk.py` | **PASS**（dex 内 0 个 Xposed 类；`resources.arsc` stored + 4 字节对齐） |
+
+产物：`dist/EdgeGestureGuard-1.5.1-debug.apk`，82,842 B，
+MD5 `21ba221d34a9d519c4e7bef32d6e6ce4`。
+
+> 顺带修了离线构建脚本：`tools/build-local.sh` 之前没把 `app/libs/hidden-stub.jar` 放进 classpath
+>（Gradle 里有、脚本里漏了），会导致本地构建 `TaskStackListener` 找不到符号。现已补上。
+

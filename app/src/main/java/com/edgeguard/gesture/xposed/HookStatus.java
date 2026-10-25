@@ -19,6 +19,17 @@ final class HookStatus {
                 st.foregroundStrategy = fg.strategy;
             }
             st.ruleCount = HookRuntime.rules == null ? 0 : HookRuntime.rules.size();
+            // 底部"策略 A"的实测计数：只有 seen>0 才能说这条通道看得到底部触摸。
+            // 这不是猜测，是输入通道真实收到的事件数。
+            st.bottomMeasure = "seen=" + HookRuntime.bottomZoneSeen
+                    + " blocked=" + HookRuntime.bottomZoneBlocked;
+            st.zoneConfig = Zones.describe(HookRuntime.config, Zones.screenHeight());
+            st.verifyOnly = HookRuntime.verifyMode();
+            st.armed = ArmController.isArmed();
+            st.armedSource = ArmController.source();
+            st.launcherState = "策略B("
+                    + (HookRuntime.config.launcherBottom ? "已开" : "关闭")
+                    + ")：需手工扩展 Launcher 作用域，结果见 logcat [LAUNCHER]";
             st.timestamp = System.currentTimeMillis();
             return st.toJson();
         } catch (Throwable t) {

@@ -24,6 +24,9 @@ public final class StatusReceiver extends BroadcastReceiver {
                 return;
             }
             StatusBus.publish(context, json);
+            // SystemUI 是权威：把 armed 写回本地，并刷新常驻通知/磁贴显示
+            ArmClient.syncFromStatus(context,
+                    com.edgeguard.gesture.common.StatusReport.fromJson(json));
         } catch (Throwable t) {
             Logx.w("StatusReceiver failed", t);
         }

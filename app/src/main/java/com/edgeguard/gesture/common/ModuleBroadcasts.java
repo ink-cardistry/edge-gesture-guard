@@ -24,6 +24,20 @@ public final class ModuleBroadcasts {
             intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES | Intent.FLAG_RECEIVER_FOREGROUND);
             context.sendBroadcast(intent);
             Logx.i("rules pushed to SystemUI, " + (json == null ? 0 : json.length()) + " chars");
+            // 策略 B：Launcher 进程里如果没有规则，LauncherBottomHooks 就永远放行。
+            // 这里顺手给桌面包也推一份（没装/没扩展作用域时系统只是丢弃，无副作用）。
+            for (String launcher : ModuleContract.LAUNCHER_PACKAGES) {
+                try {
+                    Intent copy = new Intent(ModuleContract.ACTION_RULES_PUSH);
+                    copy.setPackage(launcher);
+                    copy.putExtra(ModuleContract.EXTRA_RULES_JSON, json == null ? "" : json);
+                    copy.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES
+                            | Intent.FLAG_RECEIVER_FOREGROUND);
+                    context.sendBroadcast(copy);
+                } catch (Throwable ignored) {
+                    // 单个包失败不影响 SystemUI 的主通道
+                }
+            }
         } catch (Throwable t) {
             Logx.w("pushRules failed", t);
         }
@@ -43,6 +57,25 @@ public final class ModuleBroadcasts {
             context.sendBroadcast(intent);
         } catch (Throwable t) {
             Logx.w("pushForeground failed", t);
+        }
+    }
+
+    /**
+     * App -> SystemUI：进入 / 退出「游戏模式」。
+     *
+     * 只发命令、不假设结果：真正的状态以 SystemUI 回推的 StatusReport.armed 为准
+     * （所以 App 的磁贴/通知在收到回推后会再刷新一次）。
+     */
+    public static void sendArmCommand(Context context, boolean arm) {
+        try {
+            Intent intent = new Intent(arm
+                    ? ModuleContract.ACTION_ARM : ModuleContract.ACTION_DISARM);
+            intent.setPackage(ModuleContract.SYSTEMUI_PACKAGE);
+            intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES | Intent.FLAG_RECEIVER_FOREGROUND);
+            context.sendBroadcast(intent);
+            Logx.i("arm command sent: " + (arm ? "ARM" : "DISARM"));
+        } catch (Throwable t) {
+            Logx.w("sendArmCommand failed", t);
         }
     }
 
