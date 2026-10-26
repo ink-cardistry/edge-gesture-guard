@@ -157,6 +157,15 @@ final class NavBarHooks {
                         || m.getParameterTypes().length != 0) {
                     continue;
                 }
+                // 1.6.3 修复：绝不能挂 android.view.View#onAttachedToWindow ——
+                // 那会抓到 SystemUI 里**所有** View（实测 1198 个，连通知行/TextView 都被隐藏，
+                // 表现为"下拉通知栏失效"）。只接受 ROM 自己声明的实现。
+                if (!Reflect.isRomDeclared(m.getDeclaringClass())) {
+                    continue;
+                }
+                if (!m.getDeclaringClass().getName().contains("NavigationBar")) {
+                    continue;
+                }
                 String key = "NAV-ATTACH|" + Reflect.signature(m);
                 if (HOOKED.contains(key)) {
                     continue;
@@ -255,6 +264,9 @@ final class NavBarHooks {
                     if (v == null) {
                         continue;
                     }
+                    if (!v.getClass().getName().contains("NavigationBar")) {
+                        continue;
+                    }
                     if (v.getVisibility() != View.INVISIBLE || v.getAlpha() != 0f) {
                         v.setVisibility(View.INVISIBLE);
                         v.setAlpha(0f);
@@ -271,6 +283,10 @@ final class NavBarHooks {
     /** 记录导航栏视图实例（由 onAttachedToWindow Hook 调用）。 */
     private static void remember(View view) {
         if (view == null) {
+            return;
+        }
+        // 只记录导航栏视图，其它一律忽略（防止误藏通知/文本框）
+        if (!view.getClass().getName().contains("NavigationBar")) {
             return;
         }
         try {
@@ -291,11 +307,21 @@ final class NavBarHooks {
     /** 退出游戏模式时还原导航栏。 */
     static void restore() {
         try {
-            View view = lastHidden;
-            if (view != null) {
-                view.setAlpha(1f);
-                view.setVisibility(View.VISIBLE);
-                Xlog.step("NAV restored after game mode off");
+            int n = 0;
+            synchronized (BARS) {
+                for (java.lang.ref.WeakReference<View> ref : BARS) {
+                    View v = ref == null ? null : ref.get();
+                    if (v == null || !v.getClass().getName().contains("NavigationBar")) {
+                        continue;
+                    }
+                    v.setAlpha(1f);
+                    v.setVisibility(View.VISIBLE);
+                    n++;
+                }
+            }
+            lastHidden = null;
+            if (n > 0) {
+                Xlog.step("NAV restored " + n + " bar view(s) after game mode off");
             }
         } catch (Throwable t) {
             Logx.w("nav restore failed", t);
