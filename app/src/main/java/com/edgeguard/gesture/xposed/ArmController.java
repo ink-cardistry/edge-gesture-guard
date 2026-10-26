@@ -74,6 +74,10 @@ final class ArmController {
             armed = false;
             source = "";
             stopWatchdog();
+            try {
+                NavBarHooks.restore();
+            } catch (Throwable ignored) {
+            }
             if (was) {
                 Xlog.step("GAME MODE OFF (" + reason + ")");
             }

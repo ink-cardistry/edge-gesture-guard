@@ -52,7 +52,7 @@ final class GestureHooks {
 
     static void install(ClassLoader classLoader) {
         StatusReport status = HookRuntime.status;
-        status.moduleVersion = "1.5.8";
+        status.moduleVersion = "1.5.9";
 
         Class<?> edgeClass = null;
         try {
@@ -78,6 +78,14 @@ final class GestureHooks {
             Xlog.step("BackInvocationGuard.install failed: " + t);
         }
 
+        // 导航栏"临时滑出"抑制：与上滑手势无关，是 SystemUI 自己的 transient 显示
+        int navCount = 0;
+        try {
+            navCount = NavBarHooks.install(classLoader);
+        } catch (Throwable t) {
+            Logx.e("NavBarHooks.install failed", t);
+        }
+
         // 功能二：通知栏下拉屏蔽（仍在 SystemUI 进程内，独立于返回手势 Hook）
         int shadeCount = 0;
         try {
@@ -98,6 +106,7 @@ final class GestureHooks {
         target.append("\n新架构 InputEventReceiver: ").append(modernCount).append(" 个入口");
         target.append("\n返回触发拦截 (onBackInvoked): ").append(backCallbackCount).append(" 个入口");
         target.append("\n通知栏下拉 (shade 触摸链): ").append(shadeCount).append(" 个入口");
+        target.append("\n导航栏滑出抑制 (transitionTo): ").append(navCount).append(" 个入口");
         if (MODERN_DETAIL.length() > 0) {
             target.append("\n候选: ").append(MODERN_DETAIL);
         }
@@ -118,6 +127,7 @@ final class GestureHooks {
                 + ", legacy=" + legacyCount + ", modern=" + modernCount
                 + ", backCallback=" + backCallbackCount
                 + ", shade=" + status.shadeState + "(" + shadeCount + ")"
+                + ", navbar=" + navCount
                 + ", bottom=" + status.bottomState
                 + ", zones[" + HookRuntime.config.describe() + "]");
         Logx.i("hook install finished: edge=" + status.edgeHooked
