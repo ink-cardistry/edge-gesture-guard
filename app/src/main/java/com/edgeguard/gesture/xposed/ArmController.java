@@ -216,6 +216,11 @@ final class ArmController {
                     maybeExitOnUnlock("auto: unlocked");
                     return;
                 }
+                // 游戏模式期间持续压住导航栏（防止 ROM 用别的路径让它重新可见）
+                try {
+                    NavBarHooks.enforce();
+                } catch (Throwable ignored) {
+                }
                 Handler h = watchdog;
                 if (h != null && armed) {
                     h.postDelayed(this, WATCH_MS);

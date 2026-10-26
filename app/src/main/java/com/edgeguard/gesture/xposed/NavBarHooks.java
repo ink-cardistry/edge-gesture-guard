@@ -39,10 +39,29 @@ final class NavBarHooks {
             "com.android.systemui.navigationbar.views.NavigationBarView",
     };
 
-    private static final String[] METHOD_NAMES = {"transitionTo", "applyMode", "updateMode"};
+    /**
+     * 模式切换的方法名候选。
+     *
+     * 实测（LineageOS 24 / A17，NavigationBarTransitions 只有这些方法）：
+     *   applyDarkIntensity/1  applyLightsOut/2  getTintAnimationDuration/0
+     *   onTransition/3        setAutoDim/1      applyModeBackground/2   modeToString$1/1
+     * 也就是说这个 ROM 里 transitionTo/applyMode 都在父类且不在候选类里，
+     * 真正的切换回调是 **onTransition(int oldMode, int newMode, boolean animate)**。
+     */
+    private static final String[] METHOD_NAMES = {
+            "onTransition",
+            "transitionTo",
+            "applyMode",
+            "applyModeBackground",
+            "applyLightsOut",
+            "updateMode",
+    };
 
     private static final Set<String> HOOKED = new HashSet<>();
     private static volatile long lastLogAt;
+    /** 已捕获的导航栏视图（onAttachedToWindow 时记录），用于"保险式"强制隐藏 */
+    private static final java.util.List<java.lang.ref.WeakReference<View>> BARS =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<java.lang.ref.WeakReference<View>>());
     /** 被我们藏起来的导航栏视图，退出游戏模式时用于还原 */
     private static volatile View lastHidden;
     private static volatile boolean methodDumpDone;
@@ -56,6 +75,7 @@ final class NavBarHooks {
             List<Class<?>> classes = Targets.loadAll(classLoader, TRANSITION_CLASSES);
             for (Class<?> cls : classes) {
                 total += hookClass(cls);
+                total += hookAttach(cls);
             }
             if (total == 0 && !methodDumpDone) {
                 methodDumpDone = true;
@@ -121,6 +141,50 @@ final class NavBarHooks {
         return count;
     }
 
+    /**
+     * 捕获导航栏视图实例：挂 NavigationBarView#onAttachedToWindow()（实测存在）。
+     * 实例被记下来后，enforce() 才能在游戏模式期间按需强制隐藏。
+     */
+    private static int hookAttach(Class<?> cls) {
+        int count = 0;
+        Class<?> c = cls;
+        int depth = 0;
+        while (c != null && c != Object.class && depth++ < 4) {
+            for (Method m : c.getDeclaredMethods()) {
+                if (!"onAttachedToWindow".equals(m.getName())
+                        || m.getParameterTypes().length != 0) {
+                    continue;
+                }
+                String key = "NAV-ATTACH|" + Reflect.signature(m);
+                if (HOOKED.contains(key)) {
+                    continue;
+                }
+                try {
+                    m.setAccessible(true);
+                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                if (param.thisObject instanceof View) {
+                                    remember((View) param.thisObject);
+                                }
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    });
+                    HOOKED.add(key);
+                    count++;
+                    Logx.i("hooked [NAV-ATTACH] " + Reflect.signature(m));
+                } catch (Throwable t) {
+                    Logx.w("hook attach failed: " + Reflect.signature(m), t);
+                }
+                break;
+            }
+            c = c.getSuperclass();
+        }
+        return count;
+    }
+
     /** 名字命中 + 第一个参数是 int（transitionTo(int[, boolean]) / applyMode(int[…])）。 */
     private static boolean isWanted(Method m) {
         boolean nameOk = false;
@@ -168,6 +232,56 @@ final class NavBarHooks {
             } catch (Throwable t) {
                 Logx.w("nav hook callback failed: " + signature + " (放行原逻辑)", t);
             }
+        }
+    }
+
+    /**
+     * 保险式强制隐藏：游戏模式期间每 3 秒由 ArmController 的看门狗调一次。
+     *
+     * 为什么需要：onTransition 是"模式切换"的入口，但 ROM 可能还有别的路径
+     * 让导航栏重新可见（例如直接改窗口 alpha）。这里把捕获到的 NavigationBarView
+     * 再按一遍，成本只是一次 visibility 赋值。
+     */
+    static void enforce() {
+        if (!ArmController.isArmed()) {
+            return;
+        }
+        try {
+            synchronized (BARS) {
+                for (java.lang.ref.WeakReference<View> ref : BARS) {
+                    View v = ref == null ? null : ref.get();
+                    if (v == null) {
+                        continue;
+                    }
+                    if (v.getVisibility() != View.INVISIBLE || v.getAlpha() != 0f) {
+                        v.setVisibility(View.INVISIBLE);
+                        v.setAlpha(0f);
+                        lastHidden = v;
+                        Xlog.step("NAV enforce hide (view=" + v.getClass().getSimpleName() + ")");
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            Logx.w("nav enforce failed", t);
+        }
+    }
+
+    /** 记录导航栏视图实例（由 onAttachedToWindow Hook 调用）。 */
+    private static void remember(View view) {
+        if (view == null) {
+            return;
+        }
+        try {
+            synchronized (BARS) {
+                for (java.lang.ref.WeakReference<View> ref : BARS) {
+                    if (ref != null && ref.get() == view) {
+                        return;
+                    }
+                }
+                BARS.add(new java.lang.ref.WeakReference<View>(view));
+                Xlog.step("NAV captured bar view: " + view.getClass().getName());
+            }
+        } catch (Throwable ignored) {
         }
     }
 
