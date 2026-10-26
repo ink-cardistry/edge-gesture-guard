@@ -52,7 +52,7 @@ final class GestureHooks {
 
     static void install(ClassLoader classLoader) {
         StatusReport status = HookRuntime.status;
-        status.moduleVersion = "1.6.4";
+        status.moduleVersion = "1.6.5";
 
         Class<?> edgeClass = null;
         try {
@@ -78,12 +78,18 @@ final class GestureHooks {
             Xlog.step("BackInvocationGuard.install failed: " + t);
         }
 
-        // 导航栏"临时滑出"抑制：与上滑手势无关，是 SystemUI 自己的 transient 显示
+        // 导航栏"临时滑出"抑制：实测在 LineageOS 24 上无法可靠做到
+        // （transient 显示由 system_server 的 DisplayPolicy 发起；1.6.2/1.6.4 的几种挂法
+        //   要么抓不到目标视图，要么误藏通知行）。因此默认**不安装**，避免误伤。
+        // 需要时把下面的开关改 true 自行试验（NavBarHooks 代码保留）。
         int navCount = 0;
-        try {
-            navCount = NavBarHooks.install(classLoader);
-        } catch (Throwable t) {
-            Logx.e("NavBarHooks.install failed", t);
+        final boolean NAV_HOOK_ENABLED = false;
+        if (NAV_HOOK_ENABLED) {
+            try {
+                navCount = NavBarHooks.install(classLoader);
+            } catch (Throwable t) {
+                Logx.e("NavBarHooks.install failed", t);
+            }
         }
 
         // 功能二：通知栏下拉屏蔽（仍在 SystemUI 进程内，独立于返回手势 Hook）
