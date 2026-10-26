@@ -80,40 +80,12 @@
             android:text="@string/block_right"
             android:textSize="14sp" />
 
-        <CheckBox
-            android:id="@+id/block_top_shade"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="44dp"
-            android:text="@string/block_top_shade"
-            android:textSize="14sp" />
-
         <TextView
-            android:id="@+id/top_hint"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:paddingBottom="4dp"
-            android:text="@string/top_shade_unsupported_hint"
+            android:text="@string/block_leftright_hint"
             android:textColor="?android:attr/textColorSecondary"
-            android:textSize="11sp"
-            android:visibility="gone" />
-
-        <CheckBox
-            android:id="@+id/block_bottom"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="44dp"
-            android:text="@string/block_bottom"
-            android:textSize="14sp" />
-
-        <TextView
-            android:id="@+id/bottom_hint"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingBottom="4dp"
-            android:text="@string/bottom_unsupported_hint"
-            android:textColor="?android:attr/textColorSecondary"
-            android:textSize="11sp"
-            android:visibility="gone" />
+            android:textSize="11sp" />
     </LinearLayout>
 </LinearLayout>

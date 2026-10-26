@@ -21,21 +21,19 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * 可展开的应用列表：点一行展开四个复选框，勾选即保存并立刻广播给 SystemUI。
+ * 应用列表：每个应用只有「左边缘返回 / 右边缘返回」两个开关（常驻规则）。
  *
- * 四个开关：
- *   左 / 右  —— A12-A17 都已在 SystemUI 内实现，可靠性最高；
- *   顶部下拉 —— 在 SystemUI 的 shade 触摸链上实现（功能二）；
- *   底部上滑 —— 实验性（功能一：策略 A 坐标判断；A16/17 的最终执行在 Launcher 进程）。
+ * 1.5.8 起模型收敛成一套：
+ *  - 左/右返回：按应用常驻（在这个列表里配置）；
+ *  - 顶部下拉 / 底部上滑：**只由「游戏模式」控制**（不再出现在列表里）。
  *
- * 复选框**永远可点**：即使当前探测不到入口也允许用户先配置好规则，
- * 真实是否生效以状态卡里的实测结果为准（不在这层假装支持或假装不支持）。
+ * 旧版本按应用勾过的 top/bottom 字段仍保留在数据里（不破坏用户配置），
+ * 但已不参与判定；这里保存时会原样带回去。
  */
 public final class AppListAdapter extends BaseAdapter {
 
     public interface Listener {
-        void onRulesChanged(String packageName, boolean blockLeft, boolean blockRight,
-                            boolean blockBottom, boolean blockTopShade);
+        void onRulesChanged(String packageName, boolean blockLeft, boolean blockRight);
     }
 
     private final Context context;
@@ -48,8 +46,6 @@ public final class AppListAdapter extends BaseAdapter {
     private final Set<String> expanded = new HashSet<>();
 
     private String query = "";
-    private boolean bottomObserved = false;
-    private boolean shadeSupported = false;
 
     public AppListAdapter(Context context, RuleStore store, Listener listener) {
         this.context = context;
@@ -71,23 +67,14 @@ public final class AppListAdapter extends BaseAdapter {
         applyFilter();
     }
 
-    /**
-     * 更新两条"实验性"通道的实测状态，只影响提示文案，不影响可点性。
-     *
-     * @param bottomObserved 输入通道是否真的观测到过底部区域事件（seen &gt; 0）
-     * @param shadeSupported 通知栏触摸链是否挂上了（shade hooks &gt; 0）
-     */
+    /** 保留旧接口（顶部/底部已收进游戏模式，这里无需状态）。 */
     public void setSupport(boolean bottomObserved, boolean shadeSupported) {
-        if (this.bottomObserved != bottomObserved || this.shadeSupported != shadeSupported) {
-            this.bottomObserved = bottomObserved;
-            this.shadeSupported = shadeSupported;
-            notifyDataSetChanged();
-        }
+        // no-op
     }
 
-    /** 兼容旧调用点。 */
+    /** 保留旧调用点。 */
     public void setBottomSupported(boolean supported) {
-        setSupport(supported, shadeSupported);
+        // no-op
     }
 
     private void applyFilter() {
@@ -147,26 +134,10 @@ public final class AppListAdapter extends BaseAdapter {
         holder.summary.setText(summary(rule));
         holder.expand.setVisibility(expanded.contains(item.packageName) ? View.VISIBLE : View.GONE);
 
-        // 先摘掉监听再 setChecked，避免绑定过程触发写盘/广播
         holder.left.setOnCheckedChangeListener(null);
         holder.right.setOnCheckedChangeListener(null);
-        holder.bottom.setOnCheckedChangeListener(null);
-        holder.topShade.setOnCheckedChangeListener(null);
-
         holder.left.setChecked(rule != null && rule.blockLeft);
         holder.right.setChecked(rule != null && rule.blockRight);
-        holder.bottom.setChecked(rule != null && rule.blockBottom);
-        holder.topShade.setChecked(rule != null && rule.blockTopShade);
-
-        // 提示文案反映实测状态（复选框本身始终可点，方便先配置再去验证）
-        holder.bottomHint.setText(bottomObserved
-                ? R.string.bottom_observed_hint
-                : R.string.bottom_unsupported_hint);
-        holder.bottomHint.setVisibility(View.VISIBLE);
-        holder.topHint.setText(shadeSupported
-                ? R.string.top_shade_ok_hint
-                : R.string.top_shade_unsupported_hint);
-        holder.topHint.setVisibility(View.VISIBLE);
 
         CompoundButton.OnCheckedChangeListener changeListener =
                 new CompoundButton.OnCheckedChangeListener() {
@@ -177,8 +148,6 @@ public final class AppListAdapter extends BaseAdapter {
                 };
         holder.left.setOnCheckedChangeListener(changeListener);
         holder.right.setOnCheckedChangeListener(changeListener);
-        holder.bottom.setOnCheckedChangeListener(changeListener);
-        holder.topShade.setOnCheckedChangeListener(changeListener);
 
         return view;
     }
@@ -186,15 +155,16 @@ public final class AppListAdapter extends BaseAdapter {
     private void apply(AppEntry item, ViewHolder holder) {
         boolean left = holder.left.isChecked();
         boolean right = holder.right.isChecked();
-        boolean bottom = holder.bottom.isChecked();
-        boolean top = holder.topShade.isChecked();
-        store.setPackageRule(item.packageName, left, right, bottom, top);
-        if (!left && !right && !bottom && !top) {
+        Rule existing = store.getPackageRule(item.packageName);
+        boolean legacyBottom = existing != null && existing.blockBottom;
+        boolean legacyTop = existing != null && existing.blockTopShade;
+        store.setPackageRule(item.packageName, left, right, legacyBottom, legacyTop);
+        if (!left && !right) {
             expanded.remove(item.packageName);
         }
         notifyDataSetChanged();
         if (listener != null) {
-            listener.onRulesChanged(item.packageName, left, right, bottom, top);
+            listener.onRulesChanged(item.packageName, left, right);
         }
     }
 
@@ -208,12 +178,6 @@ public final class AppListAdapter extends BaseAdapter {
         }
         if (rule.blockRight) {
             sb.append("右 ");
-        }
-        if (rule.blockTopShade) {
-            sb.append("顶 ");
-        }
-        if (rule.blockBottom) {
-            sb.append("底 ");
         }
         if (sb.length() == 0) {
             return context.getString(R.string.summary_none_configured);
@@ -230,10 +194,6 @@ public final class AppListAdapter extends BaseAdapter {
         final View expand;
         final CheckBox left;
         final CheckBox right;
-        final CheckBox bottom;
-        final CheckBox topShade;
-        final TextView bottomHint;
-        final TextView topHint;
 
         ViewHolder(View root) {
             icon = root.findViewById(R.id.app_icon);
@@ -243,10 +203,6 @@ public final class AppListAdapter extends BaseAdapter {
             expand = root.findViewById(R.id.app_expand);
             left = root.findViewById(R.id.block_left);
             right = root.findViewById(R.id.block_right);
-            bottom = root.findViewById(R.id.block_bottom);
-            topShade = root.findViewById(R.id.block_top_shade);
-            bottomHint = root.findViewById(R.id.bottom_hint);
-            topHint = root.findViewById(R.id.top_hint);
         }
     }
 }

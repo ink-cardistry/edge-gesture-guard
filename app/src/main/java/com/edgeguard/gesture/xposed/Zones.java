@@ -28,11 +28,20 @@ final class Zones {
     static final int ZONE_TOP = 1;
     static final int ZONE_BOTTOM = 2;
 
-    private static final long CACHE_TTL_MS = 60000L;
+    /**
+     * 缓存有效期。
+     *
+     * 1.5.8：从 60s 收紧到 5s，并加上"屏幕方向"作为缓存键 ——
+     * 实测 bug：竖屏进游戏（屏高 3200）后切到横屏（屏高 1440），
+     * 缓存仍是 3200 → 底部区算成 2816..3200，而横屏 rawY 最大只有 1440
+     * → 永远判不到底部区 → 横屏里上滑屏蔽失效。
+     */
+    private static final long CACHE_TTL_MS = 5000L;
     private static final Object LOCK = new Object();
 
     private static volatile int cachedHeight;
     private static volatile long cachedAt;
+    private static volatile int cachedOrientation = -1;
     private static volatile int lastLoggedHeight = -1;
 
     private Zones() {
@@ -42,16 +51,20 @@ final class Zones {
     static int screenHeight() {
         int height = cachedHeight;
         long now = android.os.SystemClock.elapsedRealtime();
-        if (height > 0 && now - cachedAt < CACHE_TTL_MS) {
+        int orientation = currentOrientation();
+        if (height > 0 && orientation == cachedOrientation && now - cachedAt < CACHE_TTL_MS) {
             return height;
         }
         synchronized (LOCK) {
             now = android.os.SystemClock.elapsedRealtime();
-            if (cachedHeight > 0 && now - cachedAt < CACHE_TTL_MS) {
+            orientation = currentOrientation();
+            if (cachedHeight > 0 && orientation == cachedOrientation
+                    && now - cachedAt < CACHE_TTL_MS) {
                 return cachedHeight;
             }
             int computed = computeHeight();
             cachedHeight = computed;
+            cachedOrientation = orientation;
             cachedAt = now;
             if (computed != lastLoggedHeight) {
                 lastLoggedHeight = computed;
@@ -78,7 +91,20 @@ final class Zones {
     static void invalidate() {
         synchronized (LOCK) {
             cachedAt = 0L;
+            cachedOrientation = -1;
         }
+    }
+
+    /** 当前屏幕方向（1=portrait, 2=landscape，取不到返回 0）。纯内存读取。 */
+    private static int currentOrientation() {
+        try {
+            Context context = HookRuntime.anyContext();
+            if (context != null) {
+                return context.getResources().getConfiguration().orientation;
+            }
+        } catch (Throwable ignored) {
+        }
+        return 0;
     }
 
     private static int computeHeight() {

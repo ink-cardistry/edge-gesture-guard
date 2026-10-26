@@ -128,13 +128,11 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
             adapter = new AppListAdapter(this, store, new AppListAdapter.Listener() {
                 @Override
                 public void onRulesChanged(String packageName, boolean blockLeft,
-                                           boolean blockRight, boolean blockBottom,
-                                           boolean blockTopShade) {
+                                           boolean blockRight) {
                     RuleSet rules = store.load();
                     ModuleBroadcasts.pushRules(MainActivity.this, rules);
                     Logx.i("rule changed: " + packageName
-                            + " L=" + blockLeft + " R=" + blockRight + " B=" + blockBottom
-                            + " T=" + blockTopShade
+                            + " L=" + blockLeft + " R=" + blockRight
                             + " total=" + rules.size());
                 }
             });
@@ -185,14 +183,6 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
                 @Override
                 public void onClick(View v) {
                     openAccessibilitySettings();
-                }
-            });
-
-            Button presetButton = findViewById(R.id.btn_game_preset);
-            presetButton.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    applyGamePreset();
                 }
             });
 
@@ -295,7 +285,13 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
             }
             sb.append('\n');
             // 功能一：底部上滑 —— 只报实测结论，不报"希望"
-            sb.append("· 底部上滑：");
+            sb.append("· 顶部下拉 / 底部上滑：只由「游戏模式」控制");
+            if (report.armed) {
+                sb.append("（当前已开启）");
+            } else {
+                sb.append("（当前关闭，系统手势恢复）");
+            }
+            sb.append("\n    底部上滑：");
             if (report.bottomConsume) {
                 sb.append("策略 A 已开启「吞事件」（实验性）");
             } else {
@@ -709,41 +705,8 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
     }
 
     // ------------------------------------------------------------------
-    // 音游快捷预设 / 阈值与验证模式
+    // 阈值 / 验证模式（顶部与底部只由游戏模式控制）
     // ------------------------------------------------------------------
-
-    /**
-     * 音游一键预设：对**当前前台应用**打开「屏蔽顶部下拉 + 底部上滑」，
-     * 左右边缘保持用户原有设置（不去动它，音游可能需要左右滑动）。
-     *
-     * 为什么用"当前前台应用"而不是让用户再选一遍：状态报告里已经带了前台包名
-     * （SystemUI 跑完一次手势/或切应用后就有），点一下即可，少一次误选。
-     */
-    private void applyGamePreset() {
-        try {
-            StatusReport report = lastReport;
-            String pkg = report == null ? null : report.foregroundPackage;
-            if (pkg == null || pkg.length() == 0) {
-                // 现场再拿一次状态（可能会触发一次查询）
-                ModuleBroadcasts.requestStatus(this);
-                Toast.makeText(this, R.string.preset_needs_foreground, Toast.LENGTH_LONG).show();
-                return;
-            }
-            com.edgeguard.gesture.common.Rule existing = store.getPackageRule(pkg);
-            boolean left = existing != null && existing.blockLeft;
-            boolean right = existing != null && existing.blockRight;
-            RuleSet next = store.setPackageRule(pkg, left, right, true, true);
-            ModuleBroadcasts.pushRules(this, next);
-            adapter.notifyDataSetChanged();
-            Toast.makeText(this, getString(R.string.preset_applied, pkg),
-                    Toast.LENGTH_LONG).show();
-            Logx.i("game preset applied to " + pkg + " (top+bottom)");
-        } catch (Throwable t) {
-            Logx.w("applyGamePreset failed", t);
-            Toast.makeText(this, "预设失败：" + t.getClass().getSimpleName(),
-                    Toast.LENGTH_LONG).show();
-        }
-    }
 
     /**
      * 阈值 + 验证模式 + 策略 B 开关（全部是模块级配置，随规则表下发）。

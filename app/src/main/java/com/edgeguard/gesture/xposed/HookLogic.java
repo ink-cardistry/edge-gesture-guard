@@ -185,9 +185,15 @@ final class HookLogic {
         RuleSet.Decision decision = (armed && kind == KIND_SHADE)
                 ? RuleSet.Decision.NONE : decisionForForeground();
         final boolean observe = HookRuntime.observeZones;
-        final boolean blockTop = decision.blockTopShade || armed;
-        final boolean blockBottom = decision.blockBottom || armed;
-        final boolean anyBlock = blockTop || blockBottom
+        // 1.5.8 模型收敛：**顶部下拉 / 底部上滑只由「游戏模式」控制**。
+        // 之前同时存在"按应用勾选（常驻）"和"游戏模式（会话）"两套入口，
+        // 语义重叠、也容易让人以为设置了自动屏蔽却又手动开会冲突。
+        // 现在：
+        //   左/右返回  = 按应用规则常驻（模块原始定位，不变）
+        //   顶部/底部  = 只在游戏模式开启时生效（per-app 的顶部/底部字段变为惰性数据）
+        final boolean blockTop = armed;
+        final boolean blockBottom = armed;
+        final boolean anyBlock = armed
                 || decision.blockLeft || decision.blockRight;
 
         // 观测计数：只有"底部/顶部规则存在"或"验证模式"时才走这里，
