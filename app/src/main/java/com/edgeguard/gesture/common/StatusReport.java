@@ -48,7 +48,7 @@ public final class StatusReport {
     public String foregroundActivity = "";
     public int ruleCount;
     public long timestamp;
-    public String moduleVersion = "1.5.9";
+    public String moduleVersion = "1.6.0";
     public final List<String> notes = new ArrayList<>();
     /** Hook 进程的诊断日志尾部（随状态报告送来，App 直接落盘导出） */
     public final List<String> diag = new ArrayList<>();

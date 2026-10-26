@@ -6,7 +6,9 @@ import com.edgeguard.gesture.common.Logx;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -16,33 +18,34 @@ import de.robv.android.xposed.XposedBridge;
 /**
  * 游戏模式期间隐藏导航栏（手势胶囊 / 三键条）的"临时滑出"。
  *
- * 为什么还需要这一层：
- *   底部上滑手势的执行方是 Launcher（策略 B 已拦截）；但"从底边滑一下把导航栏临时露出来"
- *   是 **system_server 的 DisplayPolicy** 发起的 transient 请求，最终由 SystemUI 的
- *   NavigationBarTransitions 把导航栏视图切到 TRANSIENT 模式 —— 与 Launcher 完全无关。
- *   所以手势拦住后，导航栏仍然会冒出来。
+ * 背景：底部上滑手势由 Launcher 执行（策略 B 已拦）；但"从底边滑一下让导航栏露出来"
+ * 是 system_server 的 DisplayPolicy 发起的 transient 请求，最终由 SystemUI 的
+ * NavigationBarTransitions 把视图切到 TRANSIENT —— 与 Launcher 无关，所以还要单独处理。
  *
- * 做法（全部只影响本机视觉，不改系统状态）：
- *   1) Hook NavigationBarTransitions#transitionTo(int)：游戏模式开启时**跳过这次切换**；
- *   2) 顺手把导航栏视图 setVisibility(INVISIBLE) + alpha=0，确保它立刻消失；
- *   3) 退出游戏模式后不再拦截，下一次正常的 transitionTo 会把它恢复。
- *
- * 安全：任何一步失败都只记日志；拿不到 View 就只跳过 transitionTo，不会崩。
+ * 1.6.0 的修正（上一版挂载数=0 的原因）：
+ *   NavigationBarTransitions **自己没有** transitionTo(int)，它继承自
+ *   com.android.systemui.statusbar.phone.BarTransitions；只扫本类声明方法必然为 0。
+ *   现在会沿父类链找 transitionTo / applyMode（1~3 个参数，第一个是 int），
+ *   并且**按实例类名过滤**（只有 NavigationBar 的实例才处理，不影响状态栏的同一套基类）。
  */
 final class NavBarHooks {
 
-    /** 候选类：不同 ROM 的位置（navigationbar / navigationbar.views）。 */
     private static final String[] TRANSITION_CLASSES = {
             "com.android.systemui.navigationbar.NavigationBarTransitions",
             "com.android.systemui.navigationbar.views.NavigationBarTransitions",
+            // 这两个是"父类兜底"：transitionTo/applyMode 真正声明在这里
+            "com.android.systemui.statusbar.phone.BarTransitions",
             "com.android.systemui.navigationbar.NavigationBarView",
             "com.android.systemui.navigationbar.views.NavigationBarView",
     };
+
+    private static final String[] METHOD_NAMES = {"transitionTo", "applyMode", "updateMode"};
 
     private static final Set<String> HOOKED = new HashSet<>();
     private static volatile long lastLogAt;
     /** 被我们藏起来的导航栏视图，退出游戏模式时用于还原 */
     private static volatile View lastHidden;
+    private static volatile boolean methodDumpDone;
 
     private NavBarHooks() {
     }
@@ -52,35 +55,51 @@ final class NavBarHooks {
         try {
             List<Class<?>> classes = Targets.loadAll(classLoader, TRANSITION_CLASSES);
             for (Class<?> cls : classes) {
-                total += hookTransition(cls);
+                total += hookClass(cls);
+            }
+            if (total == 0 && !methodDumpDone) {
+                methodDumpDone = true;
+                for (Class<?> cls : classes) {
+                    Logx.w("导航栏类无可用方法: " + cls.getName()
+                            + " methods= " + Reflect.listMethods(cls));
+                }
             }
         } catch (Throwable t) {
             Logx.e("NavBarHooks.install failed", t);
         }
         if (total == 0) {
-            Logx.w("导航栏 Hook 未挂载（类名可能不同）：游戏模式期间导航栏仍可能滑出");
+            Logx.w("导航栏 Hook 未挂载（方法名可能不同）：游戏模式期间导航栏仍可能滑出");
         } else {
             Logx.i("导航栏 Hook 已挂载: " + total + " 个入口");
         }
         return total;
     }
 
-    private static int hookTransition(Class<?> cls) {
+    /** 沿父类链收集 transitionTo / applyMode 这类"模式切换"方法并挂载。 */
+    private static int hookClass(Class<?> cls) {
         int count = 0;
-        Method[] methods;
-        try {
-            methods = cls.getDeclaredMethods();
-        } catch (Throwable t) {
-            return 0;
+        Set<Method> methods = new LinkedHashSet<>();
+        Class<?> c = cls;
+        int depth = 0;
+        while (c != null && c != Object.class && depth++ < 5) {
+            Method[] declared;
+            try {
+                declared = c.getDeclaredMethods();
+            } catch (Throwable t) {
+                break;
+            }
+            for (Method m : declared) {
+                if (Modifier.isStatic(m.getModifiers()) || Modifier.isAbstract(m.getModifiers())) {
+                    continue;
+                }
+                if (!isWanted(m)) {
+                    continue;
+                }
+                methods.add(m);
+            }
+            c = c.getSuperclass();
         }
         for (Method m : methods) {
-            if (!"transitionTo".equals(m.getName())) {
-                continue;
-            }
-            Class<?>[] params = m.getParameterTypes();
-            if (params.length != 1 || params[0] != int.class) {
-                continue;
-            }
             String signature = Reflect.signature(m);
             String key = "NAV|" + signature;
             if (HOOKED.contains(key)) {
@@ -88,7 +107,7 @@ final class NavBarHooks {
             }
             try {
                 m.setAccessible(true);
-                XposedBridge.hookMethod(m, new TransitionHook(signature));
+                XposedBridge.hookMethod(m, new ModeHook(signature));
                 HOOKED.add(key);
                 count++;
                 Logx.i("hooked [NAV] " + signature);
@@ -96,14 +115,33 @@ final class NavBarHooks {
                 Logx.w("hook failed: " + signature, t);
             }
         }
+        if (count == 0 && !methodDumpDone) {
+            Logx.i("导航栏候选无匹配方法: " + cls.getName());
+        }
         return count;
     }
 
-    private static final class TransitionHook extends XC_MethodHook {
+    /** 名字命中 + 第一个参数是 int（transitionTo(int[, boolean]) / applyMode(int[…])）。 */
+    private static boolean isWanted(Method m) {
+        boolean nameOk = false;
+        for (String n : METHOD_NAMES) {
+            if (n.equals(m.getName())) {
+                nameOk = true;
+                break;
+            }
+        }
+        if (!nameOk) {
+            return false;
+        }
+        Class<?>[] params = m.getParameterTypes();
+        return params.length >= 1 && params.length <= 3 && params[0] == int.class;
+    }
+
+    private static final class ModeHook extends XC_MethodHook {
 
         private final String signature;
 
-        TransitionHook(String signature) {
+        ModeHook(String signature) {
             this.signature = signature;
         }
 
@@ -113,15 +151,19 @@ final class NavBarHooks {
                 if (!ArmController.isArmed()) {
                     return;
                 }
-                int mode = (Integer) param.args[0];
-                boolean hidden = hideBarView(param.thisObject);
-                // 跳过这次切换：导航栏保持"不显示"，直到游戏模式关闭
+                // 只处理导航栏的实例：同一个 applyMode 基类也被状态栏复用，
+                // 不加这条过滤会把状态栏也藏起来。
+                Object self = param.thisObject;
+                String cls = self == null ? "" : self.getClass().getName();
+                if (!cls.contains("NavigationBar")) {
+                    return;
+                }
+                boolean hidden = hideBarView(self);
                 param.setResult(null);
                 long now = android.os.SystemClock.elapsedRealtime();
                 if (now - lastLogAt > 1000L) {
                     lastLogAt = now;
-                    Xlog.step("NAV suppressed transitionTo(mode=" + mode + ") armed=true viewHidden="
-                            + hidden + " via " + signature);
+                    Xlog.step("NAV suppressed " + signature + " armed=true viewHidden=" + hidden);
                 }
             } catch (Throwable t) {
                 Logx.w("nav hook callback failed: " + signature + " (放行原逻辑)", t);
@@ -129,7 +171,7 @@ final class NavBarHooks {
         }
     }
 
-    /** 退出游戏模式时还原导航栏（下一次正常的 transitionTo 也会恢复，这里做即时兜底）。 */
+    /** 退出游戏模式时还原导航栏。 */
     static void restore() {
         try {
             View view = lastHidden;
@@ -151,7 +193,7 @@ final class NavBarHooks {
         try {
             Class<?> cls = target.getClass();
             int depth = 0;
-            while (cls != null && cls != Object.class && depth++ < 4) {
+            while (cls != null && cls != Object.class && depth++ < 5) {
                 for (Field f : cls.getDeclaredFields()) {
                     if (!View.class.isAssignableFrom(f.getType())) {
                         continue;

@@ -52,7 +52,7 @@ final class GestureHooks {
 
     static void install(ClassLoader classLoader) {
         StatusReport status = HookRuntime.status;
-        status.moduleVersion = "1.5.9";
+        status.moduleVersion = "1.6.0";
 
         Class<?> edgeClass = null;
         try {
