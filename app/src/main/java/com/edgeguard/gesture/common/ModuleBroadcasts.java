@@ -68,14 +68,29 @@ public final class ModuleBroadcasts {
      */
     public static void sendArmCommand(Context context, boolean arm) {
         try {
-            Intent intent = new Intent(arm
-                    ? ModuleContract.ACTION_ARM : ModuleContract.ACTION_DISARM);
-            intent.setPackage(ModuleContract.SYSTEMUI_PACKAGE);
-            intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES | Intent.FLAG_RECEIVER_FOREGROUND);
-            context.sendBroadcast(intent);
-            Logx.i("arm command sent: " + (arm ? "ARM" : "DISARM"));
+            // 关键：游戏模式要同时驱动 SystemUI（顶部拉）与 Launcher（底部上滑）。
+            // 两个进程各有自己的 ArmController 静态状态，只发给 SystemUI 的话
+            // Launcher 侧永远 isArmed()==false —— 底部就永远放行（1.5.6 实测踩到）。
+            send(context, ModuleContract.SYSTEMUI_PACKAGE, arm);
+            for (String launcher : ModuleContract.LAUNCHER_PACKAGES) {
+                send(context, launcher, arm);
+            }
+            Logx.i("arm command sent to SystemUI + " + ModuleContract.LAUNCHER_PACKAGES.length
+                    + " launcher packages: " + (arm ? "ARM" : "DISARM"));
         } catch (Throwable t) {
             Logx.w("sendArmCommand failed", t);
+        }
+    }
+
+    private static void send(Context context, String pkg, boolean arm) {
+        try {
+            Intent intent = new Intent(arm
+                    ? ModuleContract.ACTION_ARM : ModuleContract.ACTION_DISARM);
+            intent.setPackage(pkg);
+            intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES | Intent.FLAG_RECEIVER_FOREGROUND);
+            context.sendBroadcast(intent);
+        } catch (Throwable ignored) {
+            // 单个包失败不影响其它进程
         }
     }
 
