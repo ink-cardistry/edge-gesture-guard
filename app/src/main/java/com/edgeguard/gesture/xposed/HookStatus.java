@@ -28,6 +28,7 @@ final class HookStatus {
             st.bottomConsume = HookRuntime.config != null && HookRuntime.config.bottomConsume;
             st.navHooks = HookRuntime.navHooks;
             st.navBars = HookRuntime.navBars;
+            st.navDetail = HookRuntime.navDetail;
             Xlog.step("NAV state hooks=" + st.navHooks + " bars=" + st.navBars
                     + " armed=" + st.armed);
             st.armed = ArmController.isArmed();

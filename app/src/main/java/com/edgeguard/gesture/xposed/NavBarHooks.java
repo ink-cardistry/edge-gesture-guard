@@ -71,11 +71,16 @@ final class NavBarHooks {
 
     static int install(ClassLoader classLoader) {
         int total = 0;
+        int attachCount = 0;
+        int foundClasses = 0;
         try {
             List<Class<?>> classes = Targets.loadAll(classLoader, TRANSITION_CLASSES);
+            foundClasses = classes.size();
             for (Class<?> cls : classes) {
                 total += hookClass(cls);
-                total += hookAttach(cls);
+                int a = hookAttach(cls);
+                attachCount += a;
+                total += a;
             }
             if (total == 0 && !methodDumpDone) {
                 methodDumpDone = true;
@@ -89,6 +94,8 @@ final class NavBarHooks {
         }
         HookRuntime.navHooks = total;
         HookRuntime.navBars = BARS.size();
+        HookRuntime.navDetail = "hooks=" + total + " attach=" + attachCount
+                + " classes=" + foundClasses;
         if (total == 0) {
             Logx.w("导航栏 Hook 未挂载（方法名可能不同）：游戏模式期间导航栏仍可能滑出");
         } else {
@@ -289,6 +296,7 @@ final class NavBarHooks {
         if (!view.getClass().getName().contains("NavigationBar")) {
             return;
         }
+        boolean first = BARS.isEmpty();
         try {
             synchronized (BARS) {
                 for (java.lang.ref.WeakReference<View> ref : BARS) {
@@ -298,7 +306,19 @@ final class NavBarHooks {
                 }
                 BARS.add(new java.lang.ref.WeakReference<View>(view));
                 HookRuntime.navBars = BARS.size();
-                Xlog.step("NAV captured bar view: " + view.getClass().getName());
+                if (first) {
+                    String detail;
+                    try {
+                        View root = view.getRootView();
+                        detail = "bar=" + view.getClass().getSimpleName()
+                                + " root=" + (root == null ? "?" : root.getClass().getSimpleName())
+                                + " size=" + view.getWidth() + "x" + view.getHeight();
+                    } catch (Throwable t) {
+                        detail = "bar=" + view.getClass().getSimpleName();
+                    }
+                    HookRuntime.navDetail = HookRuntime.navDetail + " | " + detail;
+                    Xlog.step("NAV bar detail: " + detail);
+                }
             }
         } catch (Throwable ignored) {
         }

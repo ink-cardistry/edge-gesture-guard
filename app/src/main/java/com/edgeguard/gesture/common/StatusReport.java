@@ -41,6 +41,7 @@ public final class StatusReport {
     /** 导航栏 Hook 挂载数 / 捕获到的导航栏视图数 */
     public int navHooks;
     public int navBars;
+    public String navDetail = "";
     /** 「游戏模式」会话是否开启（顶部下拉 + 底部上滑 的总闸） */
     public boolean armed;
     /** 谁打开的（tile / notification / app / …），用于 UI 显示与排障 */
@@ -51,7 +52,7 @@ public final class StatusReport {
     public String foregroundActivity = "";
     public int ruleCount;
     public long timestamp;
-    public String moduleVersion = "1.6.3";
+    public String moduleVersion = "1.6.4";
     public final List<String> notes = new ArrayList<>();
     /** Hook 进程的诊断日志尾部（随状态报告送来，App 直接落盘导出） */
     public final List<String> diag = new ArrayList<>();
@@ -73,6 +74,7 @@ public final class StatusReport {
             o.put("bottomConsume", bottomConsume);
             o.put("navHooks", navHooks);
             o.put("navBars", navBars);
+            o.put("navDetail", navDetail == null ? "" : navDetail);
             o.put("armed", armed);
             o.put("armedSource", safe(armedSource));
             o.put("foregroundStrategy", foregroundStrategy == null ? "none" : foregroundStrategy);
@@ -119,6 +121,7 @@ public final class StatusReport {
             r.bottomConsume = o.optBoolean("bottomConsume", false);
             r.navHooks = o.optInt("navHooks", 0);
             r.navBars = o.optInt("navBars", 0);
+            r.navDetail = o.optString("navDetail", "");
             r.armed = o.optBoolean("armed", false);
             r.armedSource = o.optString("armedSource", "");
             r.foregroundStrategy = o.optString("foregroundStrategy", "none");

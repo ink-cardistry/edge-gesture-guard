@@ -196,6 +196,14 @@ final class HookLogic {
         final boolean anyBlock = armed
                 || decision.blockLeft || decision.blockRight;
 
+        // 底部区按下时立刻压住导航栏：比 3 秒看门狗快得多，避免"滑出来再被藏"的闪烁
+        if (armed && action == MotionEvent.ACTION_DOWN && bottomZone && kind == KIND_LAUNCHER) {
+            try {
+                NavBarHooks.enforce();
+            } catch (Throwable ignored) {
+            }
+        }
+
         // 观测计数：只有"底部/顶部规则存在"或"验证模式"时才走这里，
         // 平时连 rawY 都不读 —— 这是"非目标应用等于模块没启动"的一部分。
         if (action == MotionEvent.ACTION_DOWN && observe) {
