@@ -9,7 +9,7 @@ LSPosed 模块：**按前台应用 / Activity 动态屏蔽「左边缘返回」�
 | LSPosed 作用域 | **必需：System UI（`com.android.systemui`）**；可选：Launcher（仅策略 B，默认关闭） |
 | Hook 入口类 | `com.edgeguard.gesture.xposed.XposedEntry`（`assets/xposed_init`） |
 | 日志 TAG | `EdgeGestureGuard` |
-| 已构建产物 | `dist/EdgeGestureGuard-1.5.5-debug.apk`（debug 签名；MD5 见第 16 节构建表）|
+| 已构建产物 | `dist/EdgeGestureGuard-1.5.7-debug.apk`（debug 签名；MD5 见第 16 节构建表）|
 | 真机验证 | **LineageOS 24 / Android 17 (SDK 37) 实测通过**：左右返回屏蔽生效 |
 | 1.4.0 新增 | 顶部通知栏下拉屏蔽（SystemUI 内）；底部上滑策略 A 坐标判断 + 自检计数；策略 B（Launcher 进程，默认关）；音游快捷预设 |
 | **1.5.0 新增** | **游戏模式会话**（寄生通知 / 控制中心磁贴开启，**锁屏后解锁自动退出**）；状态卡改为「摘要 + 可折叠详情」 |
@@ -688,6 +688,13 @@ hooked [LAUNCHER] TouchInteractionService#onInputEvent(InputEvent) returns void
 > 桌面进程里的规则来源：`ModuleBroadcasts.pushRules` 会额外向 `ModuleContract.LAUNCHER_PACKAGES`
 > 各推一份；`RulesProvider` 也放行了桌面 uid。所以只要作用域加上，规则会自动到位。
 
+**1.5.7：ARM/DISARM 广播也会发给桌面进程。**
+这是"作用域勾了但底部仍没效果"的根因：两个进程各有自己的 `ArmController` 静态状态，
+以前 ARM 只发给 SystemUI，桌面进程 `isArmed()` 恒为 false，而 `"launcher":false` 时
+`onLauncherBottomTouch` 直接返回 false → **必然放行**。现在游戏模式会同时驱动两侧。
+
+> 另一个必须注意的点：**加完作用域要重启手机**。桌面是常驻进程，不重启就不会加载新作用域。
+
 **1.5.5：状态卡能直接告诉你策略 B 有没有注入。** 桌面进程挂完后会通过
 `ContentResolver.update(RULES_URI, {launcher_status: "hooks=N,v=…"})` 回报一次，
 App 显示成「策略 B：已注入（hooks=1）」或「未注入」。不用再去翻 logcat。
@@ -973,18 +980,37 @@ SystemUI(Hook) ──日志──> Logx.sink ──> HookRuntime 内存环形缓
 | 不想复制日志 | 用「导出诊断」（见 15.7）：切回 App 会自动导出，或点按钮 |
 ---
 
-# 16. 1.5.5 构建验证（本机实跑）
+# 16. 1.5.7 构建验证（本机实跑）
 
 | 步骤 | 工具 | 结果 |
 |---|---|---|
-| 资源编译/链接 | `aapt2 16.0.0.4` | 通过（`versionCode=22` / `versionName=1.5.5`） |
+| 资源编译/链接 | `aapt2 16.0.0.4` | 通过（`versionCode=24` / `versionName=1.5.7`） |
 | Java 编译 | `javac 17.0.20` + `android-35.jar` + `api-82.jar` + `hidden-stub.jar` | 通过，**0 error** |
 | dex | `d8.jar`（build-tools 35，`--min-api 30`） | 通过 |
 | 打包/签名 | `uber-apk-signer 1.3.0` | v3 签名验证通过，0 errors |
 | 结构校验 | `tools/verify-apk.py` | **PASS**（dex 内 0 个 Xposed 类；`resources.arsc` stored + 4 字节对齐） |
 
-产物：`dist/EdgeGestureGuard-1.5.5-debug.apk`，
-MD5 `7ff373b4b0c0837bc812faccd5ee6499`。
+产物：`dist/EdgeGestureGuard-1.5.7-debug.apk`，
+MD5 `f0174e667709ec3bc06c389a7db05112`。
+
+## 16.1 一键构建 + 自动推送
+
+```bash
+sh tools/build-and-push.sh
+```
+
+做四件事：编译 → 签名 → 复制到 `dist/EdgeGestureGuard-<版本>-debug.apk` → `git commit` →
+通过 `tools/push-via-api.py`（api.github.com 的 Git Data API）推进远端 main。
+
+> 为什么不用 `git push`：本机只放行 `api.github.com`，`github.com:443` 直接超时。
+> 令牌放在 `~/.eg-git-cred`（600 权限，仓库之外），**用完记得轮换**。
+
+## 16.2 桌面进程日志
+
+策略 B 跑在桌面进程，它的日志以前只存在于 logcat。1.5.6 起：
+桌面进程装好后会通过 `ContentResolver.update` 回报
+`{launcher_status: "hooks=N,…", launcher_diag: "<日志尾>"}`，
+App 导出诊断时会写出独立段落「## 策略 B（Launcher 进程回报）」。
 
 > 顺带修了离线构建脚本：`tools/build-local.sh` 之前没把 `app/libs/hidden-stub.jar` 放进 classpath
 >（Gradle 里有、脚本里漏了），会导致本地构建 `TaskStackListener` 找不到符号。现已补上。
