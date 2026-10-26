@@ -87,6 +87,8 @@ final class NavBarHooks {
         } catch (Throwable t) {
             Logx.e("NavBarHooks.install failed", t);
         }
+        HookRuntime.navHooks = total;
+        HookRuntime.navBars = BARS.size();
         if (total == 0) {
             Logx.w("导航栏 Hook 未挂载（方法名可能不同）：游戏模式期间导航栏仍可能滑出");
         } else {
@@ -279,6 +281,7 @@ final class NavBarHooks {
                     }
                 }
                 BARS.add(new java.lang.ref.WeakReference<View>(view));
+                HookRuntime.navBars = BARS.size();
                 Xlog.step("NAV captured bar view: " + view.getClass().getName());
             }
         } catch (Throwable ignored) {

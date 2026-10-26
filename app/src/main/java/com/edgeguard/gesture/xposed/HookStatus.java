@@ -26,6 +26,10 @@ final class HookStatus {
             st.zoneConfig = Zones.describe(HookRuntime.config, Zones.screenHeight());
             st.verifyOnly = HookRuntime.verifyMode();
             st.bottomConsume = HookRuntime.config != null && HookRuntime.config.bottomConsume;
+            st.navHooks = HookRuntime.navHooks;
+            st.navBars = HookRuntime.navBars;
+            Xlog.step("NAV state hooks=" + st.navHooks + " bars=" + st.navBars
+                    + " armed=" + st.armed);
             st.armed = ArmController.isArmed();
             st.armedSource = ArmController.source();
             // 真实注入状态由 Launcher 进程经 Provider 回报给 App，这里不再写死文案

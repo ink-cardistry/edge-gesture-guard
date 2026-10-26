@@ -56,6 +56,9 @@ final class HookRuntime {
     static volatile int shadeBlocked;
     /** 通知栏 Hook 收到的事件数 */
     static volatile int shadeSeen;
+    /** 导航栏 Hook 挂载数 / 捕获到的导航栏视图数（写进状态报告，不会被日志环形缓冲冲掉） */
+    static volatile int navHooks;
+    static volatile int navBars;
 
     /** 诊断环形缓冲（只在内存里，随状态报告送到 App）。最多 300 行。 */
     private static final int DIAG_MAX = 300;
