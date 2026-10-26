@@ -85,8 +85,41 @@ public final class RulesProvider extends ContentProvider {
         return 0;
     }
 
+    /**
+     * 唯一的写入口：Launcher 进程回报"策略 B 挂了多少个入口"。
+     * 只接受可信调用方（模块自身 / SystemUI / 桌面），只认一个字段，不做其它写入。
+     */
     @Override
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
-        return 0;
+        try {
+            Context ctx = getContext();
+            if (ctx == null || values == null) {
+                return 0;
+            }
+            int uid = Binder.getCallingUid();
+            if (!isTrustedCaller(ctx, uid)) {
+                Logx.w("provider update: rejected caller uid=" + uid);
+                return 0;
+            }
+            String status = values.getAsString(ModuleContract.COLUMN_LAUNCHER_STATUS);
+            String diag = values.getAsString(ModuleContract.COLUMN_LAUNCHER_DIAG);
+            if (status == null && diag == null) {
+                return 0;
+            }
+            android.content.SharedPreferences.Editor editor = ctx
+                    .getSharedPreferences(ModuleContract.PREFS_RULES, Context.MODE_PRIVATE).edit();
+            if (status != null) {
+                editor.putString(ModuleContract.PREF_LAUNCHER_STATUS, status);
+            }
+            if (diag != null) {
+                editor.putString(ModuleContract.PREF_LAUNCHER_DIAG, diag);
+            }
+            editor.apply();
+            Logx.i("launcher status reported: " + status);
+            return 1;
+        } catch (Throwable t) {
+            Logx.w("provider update failed", t);
+            return 0;
+        }
     }
 }

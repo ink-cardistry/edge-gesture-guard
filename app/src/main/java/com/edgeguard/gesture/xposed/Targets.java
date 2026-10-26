@@ -43,6 +43,12 @@ final class Targets {
             "com.android.systemui.shade.ShadeTouchEventHandler",
             "com.android.systemui.statusbar.phone.PhoneStatusBarView",
             "com.android.systemui.statusbar.phone.StatusBarTouchHandler",
+            // 下面这些是"结构差异兜底"：部分 ROM/分支把状态栏或面板放在独立窗口/独立包，
+            // 屏幕顶部 12% 的下拉可能根本不经过上面那些类。
+            "com.android.systemui.statusbar.phone.StatusBarWindowView",
+            "com.android.systemui.shade.NotificationPanelView",
+            "com.android.systemui.shade.ui.NotificationPanelViewController",
+            "com.android.systemui.scene.ui.view.SceneContainerView",
     };
 
     /**

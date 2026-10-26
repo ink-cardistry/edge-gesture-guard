@@ -25,12 +25,20 @@ final class HookStatus {
                     + " blocked=" + HookRuntime.bottomZoneBlocked;
             st.zoneConfig = Zones.describe(HookRuntime.config, Zones.screenHeight());
             st.verifyOnly = HookRuntime.verifyMode();
+            st.bottomConsume = HookRuntime.config != null && HookRuntime.config.bottomConsume;
             st.armed = ArmController.isArmed();
             st.armedSource = ArmController.source();
-            st.launcherState = "策略B("
-                    + (HookRuntime.config.launcherBottom ? "已开" : "关闭")
-                    + ")：需手工扩展 Launcher 作用域，结果见 logcat [LAUNCHER]";
+            // 真实注入状态由 Launcher 进程经 Provider 回报给 App，这里不再写死文案
+            st.launcherState = "";
             st.timestamp = System.currentTimeMillis();
+            // 把诊断日志尾部一起送过去：App 侧直接落盘，用户不用再从 logcat 复制
+            try {
+                st.diag.clear();
+                for (String line : HookRuntime.diagSnapshot(200)) {
+                    st.diag.add(line);
+                }
+            } catch (Throwable ignored) {
+            }
             return st.toJson();
         } catch (Throwable t) {
             Logx.w("buildJson failed", t);

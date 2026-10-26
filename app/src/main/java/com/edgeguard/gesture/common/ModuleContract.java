@@ -83,6 +83,17 @@ public final class ModuleContract {
     public static final String ACTION_NOTIFY_EXIT = MODULE_PACKAGE + ".action.NOTIFY_EXIT";
     public static final String ACTION_NOTIFY_TOGGLE = MODULE_PACKAGE + ".action.NOTIFY_TOGGLE";
 
+    /**
+     * Launcher 进程 -> App：策略 B 的注入状态（走 ContentProvider.update）。
+     * 为什么需要它：策略 B 跑在桌面进程里，它的日志只在 logcat，App 看不到；
+     * 没有这个回报，用户无法判断"到底加没加作用域、挂上没有"。
+     */
+    public static final String COLUMN_LAUNCHER_STATUS = "launcher_status";
+    public static final String PREF_LAUNCHER_STATUS = "launcher_status";
+    /** 桌面进程自己的诊断日志尾部（同样经 Provider 回报，App 落盘后 AI 可直接读） */
+    public static final String COLUMN_LAUNCHER_DIAG = "launcher_diag";
+    public static final String PREF_LAUNCHER_DIAG = "launcher_diag";
+
     /** App 侧"最近一次已知"的游戏模式状态（权威值永远来自 SystemUI 的状态回推） */
     public static final String PREF_ARMED = "armed";
     public static final String PREF_ARMED_SOURCE = "armed_source";

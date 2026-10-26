@@ -9,7 +9,7 @@ LSPosed 模块：**按前台应用 / Activity 动态屏蔽「左边缘返回」�
 | LSPosed 作用域 | **必需：System UI（`com.android.systemui`）**；可选：Launcher（仅策略 B，默认关闭） |
 | Hook 入口类 | `com.edgeguard.gesture.xposed.XposedEntry`（`assets/xposed_init`） |
 | 日志 TAG | `EdgeGestureGuard` |
-| 已构建产物 | `dist/EdgeGestureGuard-1.5.1-debug.apk`（debug 签名；MD5 见第 16 节构建表）|
+| 已构建产物 | `dist/EdgeGestureGuard-1.5.5-debug.apk`（debug 签名；MD5 见第 16 节构建表）|
 | 真机验证 | **LineageOS 24 / Android 17 (SDK 37) 实测通过**：左右返回屏蔽生效 |
 | 1.4.0 新增 | 顶部通知栏下拉屏蔽（SystemUI 内）；底部上滑策略 A 坐标判断 + 自检计数；策略 B（Launcher 进程，默认关）；音游快捷预设 |
 | **1.5.0 新增** | **游戏模式会话**（寄生通知 / 控制中心磁贴开启，**锁屏后解锁自动退出**）；状态卡改为「摘要 + 可折叠详情」 |
@@ -555,6 +555,33 @@ ACTION_DOWN 时
    必须靠"上滑还回不回桌面"实测。
 3. `blockBottom` 规则 / 游戏模式 + 前台包名判定正常（复用左右返回那一套，无额外 IPC）。
 
+### 12.2.1 真机实测结论（LineageOS 24 / A17，屏幕 3200px）——**策略 A 在本机无效**
+
+| 观测 | 数值 | 含义 |
+|---|---|---|
+| 底部区事件被看到 | `seen=7` | 条件 1 成立：整屏 monitor 确实送来了底部触摸 |
+| 实际吞掉的事件 | `blocked=1` | 模块确实 `finishInputEvent(true)` 并阻止了原逻辑 |
+| 上滑效果 | **仍然回桌面** | 条件 2 **不成立**：Launcher 自己的 gesture monitor 不受影响 |
+
+也就是说：**gesture monitor 之间不是互斥的**，在 SystemUI 侧消费一份不会取消 Launcher 那一份。
+这不是实现 bug，而是架构决定的 —— 所以：
+
+> **本机要真正屏蔽底部上滑，只能用策略 B（Launcher 作用域）。**
+
+**而且它是有害的**：SystemUI 消费掉那条 DOWN 之后，**游戏窗口也收不到底部 12% 的触摸** ——
+对音游就是判定区被吃掉，却仍然回桌面。
+
+所以 1.5.4 起：
+
+| 行为 | 默认 | 开关 |
+|---|---|---|
+| 策略 A：只观测计数（不吞事件） | ✅ 默认 | 无 |
+| 策略 A：真的吞掉底部事件 | ❌ 关闭 | 「阈值/验证」→「策略 A：真的吞掉底部事件」 |
+| **策略 B：Launcher 进程拦截** | 需手工扩作用域 | 「阈值/验证」→「策略 B」；**游戏模式开启时自动生效** |
+
+1.5.2 起，**打开游戏模式（armed）后策略 B 会自动生效**，不再要求额外勾第二个开关；
+但 LSPosed 作用域里必须手工加上桌面包名（`com.android.launcher3`），这一步模块无法替用户做。
+
 **验证方法（30 秒，不需要改代码）**
 
 ```bash
@@ -635,7 +662,37 @@ hooked [LAUNCHER] TouchInteractionService#onInputEvent(InputEvent) returns void
 | 拦截范围过宽 | 桌面/最近任务全部不能用 | 只在"前台命中 blockBottom + 起手在底部 12%"时拦；桌面自己在前台时不会命中规则 |
 | 规则没送到桌面进程 | 永远放行（等于没开） | `ModuleBroadcasts.pushRules` 会额外向 `ModuleContract.LAUNCHER_PACKAGES` 推一份；Provider 也放行了桌面 uid |
 
-## 12.4 策略 C（明确不支持的场景）
+## 12.4 策略 B 到底要勾哪个作用域（操作步骤）
+
+**本机要勾的包名：`com.android.launcher3`**（从状态卡"最近前台"就能确认：
+`com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher`）。
+
+```
+1) LSPosed → 模块 → 边缘手势守卫 → 作用域
+   保持 System UI 已勾，**再勾上 com.android.launcher3**
+2) 打开一次 LSPosed Manager 让它登记（约 1 分钟），然后重启手机
+3) 打开游戏模式（通知/磁贴/控制器按钮任一）
+4) 看诊断文件里是否出现：
+      [LAUNCHER] dispatched, pkg=com.android.launcher3
+      [LAUNCHER-RCVR] …onInputEvent(InputEvent) returns void   ← 挂上了能 finish 的那一层
+      [LAUNCHER] gesture receiver listener = com.android.quickstep.TouchInteractionService$$…
+5) 再上滑：应不再回桌面；游戏底部 12% 的触摸不受影响（策略 A 默认不吞事件）
+```
+
+| 日志 | 含义 | 处理 |
+|---|---|---|
+| 没有 `[LAUNCHER] dispatched` | 桌面进程没被注入 | 作用域没勾上 / 没重启 |
+| 有 dispatched、没有 `[LAUNCHER-RCVR]` | 该 ROM 的入口不是 `InputChannelCompat` 那层 | 把候选缺失行发我，补 `Targets.LAUNCHER_TOUCH_CLASSES` |
+| 有 `[LAUNCHER-RCVR]` 但仍回桌面 | 命中条件没满足（游戏模式没开 / 不在底部 12% / 规则没到桌面进程） | 看诊断里 `rules applied from … in com.android.launcher3` 是否出现 |
+
+> 桌面进程里的规则来源：`ModuleBroadcasts.pushRules` 会额外向 `ModuleContract.LAUNCHER_PACKAGES`
+> 各推一份；`RulesProvider` 也放行了桌面 uid。所以只要作用域加上，规则会自动到位。
+
+**1.5.5：状态卡能直接告诉你策略 B 有没有注入。** 桌面进程挂完后会通过
+`ContentResolver.update(RULES_URI, {launcher_status: "hooks=N,v=…"})` 回报一次，
+App 显示成「策略 B：已注入（hooks=1）」或「未注入」。不用再去翻 logcat。
+
+## 12.5 策略 C（明确不支持的场景）
 
 - 只想保留单一 SystemUI 作用域、且 `seen=0` → **当前架构下底部上滑屏蔽不可用**，
   状态卡与复选框提示都会这么写，不会给你"看起来能工作"的代码。
@@ -708,6 +765,24 @@ ZONE SHADE action=DOWN rawY=64 screenHeight=2400 inTopZone=true inBottomZone=fal
 
 状态卡对应行：`· 通知栏下拉 Hook：已挂载` + 已挂载/候选缺失清单。
 **一个都没挂上**时状态卡写"未挂载（当前 ROM 上此项不生效）"，并把缺失的候选类名列出来。
+
+### 13.4 1.5.2 的"状态栏仍能下拉"排查手段
+
+实测（LineageOS 24 / A17）：`NotificationShadeWindowView=3 / PhoneStatusBarView=3` 已挂载、
+下拉控制中心能拦住，**但从状态栏（时钟那条）往下拉仍然能拉开**。
+这通常意味着那一下走的是**另一个窗口根**（例如 `StatusBarWindowView` 之类的独立窗口）。
+
+1.5.2 因此加了三件事：
+
+1. 候选补全：`statusbar.phone.StatusBarWindowView`、`shade.NotificationPanelView`、
+   `shade.ui.NotificationPanelViewController`、`scene.ui.view.SceneContainerView`；
+2. **动态根视图发现**：第一次收到触摸时打一行
+   `SHADE touched class=… | windowRoot=… | viewAt=… | viewSize=…`，
+   并把真实窗口根的触摸方法**当场补挂**（不再假设类名）；
+3. **SHADE-TOUCH 逐次日志**（限流 500ms）：`SHADE-TOUCH <类#方法> rawY=… y=… blocked=…`，
+   用来回答"状态栏这一下到底有没有走到 Hook"。
+
+配合**诊断自动导出**（见 15.7），不需要再手工复制 logcat。
 
 ---
 
@@ -802,11 +877,26 @@ ZONE SHADE action=DOWN rawY=64 screenHeight=2400 inTopZone=true inBottomZone=fal
 
 实现要点（`ArmController`，**跑在 SystemUI 进程里**）：
 
-| 事件 | 动作 |
-|---|---|
-| `ACTION_SCREEN_OFF` 且当前已开启 | 打脏标记 `sawScreenOff = true` |
-| `ACTION_USER_PRESENT`（解锁完成）且脏标记为真 | `disarm(auto: lock -> unlock)` + 回推状态给 App |
-| `ACTION_SCREEN_ON` | 不处理（真正的「解锁完成」是 `USER_PRESENT`） |
+实现要点（`ArmController`，**跑在 SystemUI 进程里**）——**两条路，短路一条也能退出**：
+
+| 路径 | 触发 | 动作 |
+|---|---|---|
+| 快路径（广播） | `ACTION_SCREEN_OFF` | `sawLocked = true`（不看 armed，先记账） |
+| 快路径（广播） | `ACTION_SCREEN_ON` | 1.2s 后复查一次是否已解锁 |
+| 快路径（广播） | `ACTION_USER_PRESENT` | `armed && sawLocked` → `disarm(auto: user-present)` |
+| **保险丝（自检）** | armed 期间每 **3s** 一次 | `息屏 or keyguard 仍锁着` → 记账；`亮屏且已解锁` → `disarm(auto: unlocked)` |
+
+> **1.5.1 的 bug（已修）**：锁屏监听用的是 `RECEIVER_NOT_EXPORTED` 注册系统广播，
+> 与能正常工作的规则接收器（`RECEIVER_EXPORTED`）标志不同 —— 实测在这台机器上
+> 系统广播根本没送到，所以"锁屏后解锁不退出"。1.5.3 改为 `RECEIVER_EXPORTED`
+> （这三个都是 protected broadcast，只有系统能发，不存在被第三方伪造的风险），
+> **并额外加了不依赖任何广播的 3s 自检**，即使 ROM 完全不发 `USER_PRESENT` 也一定能退出。
+>
+> 3s 自检只在 armed 期间运行，退出即 `removeCallbacks`，不会长期耗电。
+
+**1.5.5：可以不自动退出。** 「阈值/验证」里新增「锁屏→解锁后**保持**游戏模式」（默认关）。
+打音游时锁一下屏再回来很常见，自动退出会让人误以为"功能没生效" —— 这个开关就是给这种情况的。
+开启后 `GAME MODE kept after unlock (keepOnUnlock=true)` 会出现在诊断里。
 
 **为什么状态放在 SystemUI 而不是 App 的 SharedPreferences**：SystemUI 常驻，锁屏/解锁广播一定收得到；
 App 随时可能被冻结或杀死。放 App 会出现「已经锁屏解锁了但 SystemUI 还在拦」的鬼状态。
@@ -829,6 +919,45 @@ App 侧只缓存「最近一次已知状态」用来画磁贴/通知。
 | QS 磁贴 | 无额外权限，需在控制中心手动添加 | — |
 | 锁屏退出 | 无 | — |
 
+## 15.7 诊断自动导出（1.5.2，不用再复制 logcat）
+
+链路：
+
+```
+SystemUI(Hook) ──日志──> Logx.sink ──> HookRuntime 内存环形缓冲(300 行)
+      │                                      │
+      └── 状态变化/请求 ──> StatusReport.diag ─┘
+                                   │  广播
+                                   ▼
+                        App: StatusReceiver
+                                   │
+                                   ▼
+              /storage/emulated/0/Android/media/com.edgeguard.gesture/
+                  edgeguard-diag-latest.txt        ← 最新的（覆盖写）
+                  edgeguard-diag-20260101-120000.txt  ← 历史快照（保留最近 5 个）
+```
+
+- **何时自动写**：每次收到 SystemUI 的状态回推（切回 App 会自动请求一次；开关游戏模式、
+  改规则也会触发），以及在通知/磁贴上操作之后。
+- **手动写**：控制器底部「导出诊断」按钮。
+- **文件内容**：完整状态字段 + 规则 JSON + Hook 进程日志尾部 200 行 + 原始状态 JSON。
+- **为什么放 `Android/media`**：`/Android/data/<包名>` 对其他 App 是禁止访问的，
+  而 `/Android/media/<包名>` 允许 App 无权限写入、且其它有存储权限的工具可以读取 ——
+  这样"用户不用复制、AI 直接读文件"才成立。
+
+## 15.8 阈值到底控制什么（1.5.5 起标签带像素）
+
+| 滑杆 | 含义 | 什么时候才有可观察效果 |
+|---|---|---|
+| 顶部屏蔽区 | 屏幕顶部多高的一条会被吃掉：**起手 `rawY ≤ 屏高 × 比例`** 才算顶部区 | 一直有效（顶部下拉拦截在 SystemUI 内） |
+| 底部屏蔽区 | 屏幕底部多高的一条算"底部手势区" | **只在策略 B（Launcher）生效后才参与判定**；策略 A 默认只观测，所以现在调它没变化 |
+
+参考：本机 3200px 高、状态栏约 70~110px、底部手势条约 100~130px。
+
+- 12%（约 384px）是保守默认值；
+- 调到 2%（约 64px）时，**从状态栏偏下起手就会漏拦** —— 所以别把顶部调太小；
+- 底部同理：策略 B 生效前调它没有任何效果（1.5.5 的状态卡会明确写「未注入 → 底部阈值现在没有效果」）。
+
 ## 15.6 排障
 
 | 现象 | 原因 / 处理 |
@@ -839,21 +968,23 @@ App 侧只缓存「最近一次已知状态」用来画磁贴/通知。
 | 通知不出现 | 检查系统设置里本 App 的通知权限（API 33+ 需允许）；渠道名「游戏模式」 |
 | 磁贴找不到 | 下拉控制中心 → 编辑（铅笔）→ 把「游戏模式」拖进可见区域 |
 | 游戏模式开了但没效果 | logcat 看两行：`GAME MODE ON` 与 `BLOCK ... armed=true`；只有前者说明顶部/底部 Hook 没挂上（看状态卡） |
-| 想确认锁屏退出 | logcat：`GAME MODE ON` → 锁屏 → 解锁 → `GAME MODE OFF (auto: lock -> unlock)` |
+| 想确认锁屏退出 | 诊断文件里应有：`game-mode watchdog started` →（锁屏）`ARM-LOCK locked/screen-off detected` →（解锁）`GAME MODE OFF (auto: unlocked)` |
+| 锁屏解锁不退出（1.5.1 及更早） | 已知 bug：系统广播用了 NOT_EXPORTED，收不到。1.5.3 已修（EXPORTED + 3s 自检） |
+| 不想复制日志 | 用「导出诊断」（见 15.7）：切回 App 会自动导出，或点按钮 |
 ---
 
-# 16. 1.5.1 构建验证（本机实跑）
+# 16. 1.5.5 构建验证（本机实跑）
 
 | 步骤 | 工具 | 结果 |
 |---|---|---|
-| 资源编译/链接 | `aapt2 16.0.0.4` | 通过（`versionCode=18` / `versionName=1.5.1`） |
+| 资源编译/链接 | `aapt2 16.0.0.4` | 通过（`versionCode=22` / `versionName=1.5.5`） |
 | Java 编译 | `javac 17.0.20` + `android-35.jar` + `api-82.jar` + `hidden-stub.jar` | 通过，**0 error** |
 | dex | `d8.jar`（build-tools 35，`--min-api 30`） | 通过 |
 | 打包/签名 | `uber-apk-signer 1.3.0` | v3 签名验证通过，0 errors |
 | 结构校验 | `tools/verify-apk.py` | **PASS**（dex 内 0 个 Xposed 类；`resources.arsc` stored + 4 字节对齐） |
 
-产物：`dist/EdgeGestureGuard-1.5.1-debug.apk`，82,842 B，
-MD5 `21ba221d34a9d519c4e7bef32d6e6ce4`。
+产物：`dist/EdgeGestureGuard-1.5.5-debug.apk`，
+MD5 `7ff373b4b0c0837bc812faccd5ee6499`。
 
 > 顺带修了离线构建脚本：`tools/build-local.sh` 之前没把 `app/libs/hidden-stub.jar` 放进 classpath
 >（Gradle 里有、脚本里漏了），会导致本地构建 `TaskStackListener` 找不到符号。现已补上。

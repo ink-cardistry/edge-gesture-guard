@@ -10,6 +10,8 @@
     <string name="btn_accessibility">前台检测助手</string>
     <string name="btn_game_preset">音游预设（顶+底）</string>
     <string name="btn_tuning">阈值/验证</string>
+    <string name="btn_export_diag">导出诊断</string>
+    <string name="diag_exported">已导出到：%1$s</string>
 
     <string name="block_left">屏蔽左边缘返回</string>
     <string name="block_right">屏蔽右边缘返回</string>
@@ -52,7 +54,9 @@
     <string name="tuning_top">顶部屏蔽区</string>
     <string name="tuning_bottom">底部屏蔽区</string>
     <string name="tuning_verify">验证模式：只打日志、不拦截（先日志后拦截）</string>
-    <string name="tuning_launcher">策略 B：在 Launcher 进程拦底部手势（需手工扩展作用域，实验性）</string>
+    <string name="tuning_keep_unlock">锁屏→解锁后**保持**游戏模式（默认关＝自动退出）</string>
+    <string name="tuning_bottom_consume">策略 A：在 SystemUI 里真的吞掉底部事件（默认关。实测拦不住 Home，还会让游戏收不到底部 12% 的触摸）</string>
+    <string name="tuning_launcher">策略 B：在 Launcher 进程拦底部手势（需手工把桌面包名加进作用域）</string>
     <string name="tuning_saved">已保存并推送到 SystemUI</string>
 
     <string name="preset_needs_foreground">还没拿到前台应用：先切到目标音游、或在状态卡看到“最近前台”后再点一次。</string>

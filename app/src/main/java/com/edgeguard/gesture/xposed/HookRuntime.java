@@ -57,7 +57,55 @@ final class HookRuntime {
     /** 通知栏 Hook 收到的事件数 */
     static volatile int shadeSeen;
 
+    /** 诊断环形缓冲（只在内存里，随状态报告送到 App）。最多 300 行。 */
+    private static final int DIAG_MAX = 300;
+    private static final java.util.ArrayDeque<String> DIAG = new java.util.ArrayDeque<>();
+
     private HookRuntime() {
+    }
+
+    /** 把日志旁路接到环形缓冲（Hook 进程启动时装一次）。 */
+    static void installLogSink() {
+        try {
+            int max = DIAG_MAX;
+            Logx.sink = new Logx.Sink() {
+                @Override
+                public void onLog(int priority, String message) {
+                    try {
+                        if (message == null) {
+                            return;
+                        }
+                        String line = android.os.SystemClock.elapsedRealtime() + " " + message;
+                        if (line.length() > 320) {
+                            line = line.substring(0, 320) + "…";
+                        }
+                        synchronized (DIAG) {
+                            DIAG.addLast(line);
+                            while (DIAG.size() > max) {
+                                DIAG.removeFirst();
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+            };
+            Xlog.step("diag ring installed (max=" + DIAG_MAX + ")");
+        } catch (Throwable t) {
+            Logx.w("installLogSink failed", t);
+        }
+    }
+
+    /** 取一份快照（按时间顺序，最多 limit 行）。 */
+    static String[] diagSnapshot(int limit) {
+        try {
+            synchronized (DIAG) {
+                java.util.ArrayList<String> all = new java.util.ArrayList<>(DIAG);
+                int from = Math.max(0, all.size() - Math.max(0, limit));
+                return all.subList(from, all.size()).toArray(new String[0]);
+            }
+        } catch (Throwable t) {
+            return new String[0];
+        }
     }
 
     /** 有真实 App context 就用它，否则用兜底 context。 */

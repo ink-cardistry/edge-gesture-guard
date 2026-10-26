@@ -36,6 +36,8 @@ public final class StatusReport {
     public String launcherState = "";
     public String zoneConfig = "";
     public boolean verifyOnly;
+    /** 策略 A 是否真的吞事件（默认 false：只观测，避免吃掉音游底部判定区） */
+    public boolean bottomConsume;
     /** 「游戏模式」会话是否开启（顶部下拉 + 底部上滑 的总闸） */
     public boolean armed;
     /** 谁打开的（tile / notification / app / …），用于 UI 显示与排障 */
@@ -46,8 +48,10 @@ public final class StatusReport {
     public String foregroundActivity = "";
     public int ruleCount;
     public long timestamp;
-    public String moduleVersion = "1.5.1";
+    public String moduleVersion = "1.5.6";
     public final List<String> notes = new ArrayList<>();
+    /** Hook 进程的诊断日志尾部（随状态报告送来，App 直接落盘导出） */
+    public final List<String> diag = new ArrayList<>();
 
     public String toJson() {
         try {
@@ -63,6 +67,7 @@ public final class StatusReport {
             o.put("launcherState", safe(launcherState));
             o.put("zoneConfig", safe(zoneConfig));
             o.put("verifyOnly", verifyOnly);
+            o.put("bottomConsume", bottomConsume);
             o.put("armed", armed);
             o.put("armedSource", safe(armedSource));
             o.put("foregroundStrategy", foregroundStrategy == null ? "none" : foregroundStrategy);
@@ -77,6 +82,11 @@ public final class StatusReport {
                 arr.put(n);
             }
             o.put("notes", arr);
+            JSONArray diagArr = new JSONArray();
+            for (String d : diag) {
+                diagArr.put(d);
+            }
+            o.put("diag", diagArr);
             return o.toString();
         } catch (Throwable t) {
             return "{}";
@@ -101,6 +111,7 @@ public final class StatusReport {
             r.launcherState = o.optString("launcherState", "");
             r.zoneConfig = o.optString("zoneConfig", "");
             r.verifyOnly = o.optBoolean("verifyOnly", false);
+            r.bottomConsume = o.optBoolean("bottomConsume", false);
             r.armed = o.optBoolean("armed", false);
             r.armedSource = o.optString("armedSource", "");
             r.foregroundStrategy = o.optString("foregroundStrategy", "none");
@@ -116,6 +127,15 @@ public final class StatusReport {
                     String n = arr.optString(i, "");
                     if (n != null && n.length() > 0) {
                         r.notes.add(n);
+                    }
+                }
+            }
+            JSONArray diagArr = o.optJSONArray("diag");
+            if (diagArr != null) {
+                for (int i = 0; i < diagArr.length(); i++) {
+                    String d = diagArr.optString(i, "");
+                    if (d != null && d.length() > 0) {
+                        r.diag.add(d);
                     }
                 }
             }

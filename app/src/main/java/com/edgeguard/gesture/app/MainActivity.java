@@ -110,6 +110,13 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
                     toggleStatusDetail();
                 }
             });
+            Button exportButton = findViewById(R.id.btn_export_diag);
+            exportButton.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    exportDiag();
+                }
+            });
             gameModeButton.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
@@ -288,9 +295,23 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
             }
             sb.append('\n');
             // 功能一：底部上滑 —— 只报实测结论，不报"希望"
-            sb.append("· 底部上滑（策略 A）：").append(report.bottomZoneObserved()
-                    ? "输入通道已观测到底部事件 → 有条件生效，请实测上滑是否仍回桌面"
-                    : "输入通道未观测到底部事件 → 当前 ROM 上策略 A 不可用");
+            sb.append("· 底部上滑：");
+            if (report.bottomConsume) {
+                sb.append("策略 A 已开启「吞事件」（实验性）");
+            } else {
+                sb.append("策略 A 仅观测（默认；吞事件拦不住 Home，还会吃掉音游底部判定区）");
+            }
+            sb.append("\n    观测计数：").append(
+                    report.bottomMeasure == null || report.bottomMeasure.length() == 0
+                            ? "无" : report.bottomMeasure);
+            String launcherStatus = readLauncherStatus();
+            if (launcherStatus == null) {
+                sb.append("\n    策略 B：**未注入**桌面进程（LSPosed 作用域还没勾 com.android.launcher3，或没重启）");
+                sb.append("\n    → 底部阈值现在没有任何效果；必须加作用域 + 重启，策略 B 才会跑");
+            } else {
+                sb.append("\n    策略 B：已注入（").append(launcherStatus).append("）");
+                sb.append("\n    游戏模式开启时自动生效；底部阈值从这一刻起才真正参与判定");
+            }
             sb.append("\n    实测计数：").append(
                     report.bottomMeasure == null || report.bottomMeasure.length() == 0
                             ? "无" : report.bottomMeasure);
@@ -337,6 +358,14 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
             }
             if ("none".equals(report.foregroundStrategy) || report.foregroundStrategy == null) {
                 sb.append("\n⚠ 前台应用识别失败，此时按设计「不屏蔽」。请点「前台检测助手」启用无障碍助手。");
+            }
+            // 诊断导出位置（用户/AI 直接去读，不用复制 logcat）
+            String diagPath = DiagExporter.lastPath();
+            if (diagPath != null && diagPath.length() > 0) {
+                sb.append("\n· 诊断已导出：").append(diagPath);
+            } else {
+                sb.append("\n· 诊断导出目录：").append(DiagExporter.dirHint(this))
+                        .append("/").append(DiagExporter.latestName());
             }
             appendSelfCheck(sb);
             statusView.setText(sb.toString());
@@ -394,6 +423,22 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
             n++;
         }
         return n;
+    }
+
+    /**
+     * 手动导出诊断（切回 App 时也会自动导出一次：onResume 会请求状态，
+     * SystemUI 回推的 StatusReport 里带着 Hook 日志尾部）。
+     */
+    private void exportDiag() {
+        try {
+            DiagExporter.exportAsync(this, lastReport, "manual");
+            String path = DiagExporter.dirHint(this) + "/" + DiagExporter.latestName();
+            Toast.makeText(this, getString(R.string.diag_exported, path),
+                    Toast.LENGTH_LONG).show();
+            Logx.i("manual diag export -> " + path);
+        } catch (Throwable t) {
+            Logx.w("exportDiag failed", t);
+        }
     }
 
     private void toggleStatusDetail() {
@@ -535,6 +580,18 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
             } finally {
                 in.close();
             }
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** Launcher 进程回报的策略 B 注入状态（由 RulesProvider.update 落盘）。 */
+    private String readLauncherStatus() {
+        try {
+            String v = getSharedPreferences(
+                    com.edgeguard.gesture.common.ModuleContract.PREFS_RULES, MODE_PRIVATE)
+                    .getString(com.edgeguard.gesture.common.ModuleContract.PREF_LAUNCHER_STATUS, null);
+            return (v == null || v.length() == 0) ? null : v;
         } catch (Throwable t) {
             return null;
         }
@@ -713,7 +770,7 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
             final SeekBar topBar = new SeekBar(this);
             topBar.setMax(28);   // 2% ~ 30%
             topBar.setProgress(Math.round(cfg.topZoneRatio * 100f) - 2);
-            topLabel.setText(getString(R.string.tuning_top) + "：" + Math.round(cfg.topZoneRatio * 100f) + "%");
+            topLabel.setText(zoneLabel(R.string.tuning_top, Math.round(cfg.topZoneRatio * 100f)));
             root.addView(topLabel);
             root.addView(topBar);
 
@@ -721,7 +778,7 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
             final SeekBar bottomBar = new SeekBar(this);
             bottomBar.setMax(28);
             bottomBar.setProgress(Math.round(cfg.bottomZoneRatio * 100f) - 2);
-            bottomLabel.setText(getString(R.string.tuning_bottom) + "：" + Math.round(cfg.bottomZoneRatio * 100f) + "%");
+            bottomLabel.setText(zoneLabel(R.string.tuning_bottom, Math.round(cfg.bottomZoneRatio * 100f)));
             root.addView(bottomLabel);
             root.addView(bottomBar);
 
@@ -729,9 +786,9 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
                 @Override
                 public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                     if (seekBar == topBar) {
-                        topLabel.setText(getString(R.string.tuning_top) + "：" + (progress + 2) + "%");
+                        topLabel.setText(zoneLabel(R.string.tuning_top, progress + 2));
                     } else {
-                        bottomLabel.setText(getString(R.string.tuning_bottom) + "：" + (progress + 2) + "%");
+                        bottomLabel.setText(zoneLabel(R.string.tuning_bottom, progress + 2));
                     }
                 }
 
@@ -752,6 +809,18 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
             verify.setChecked(cfg.verifyOnly);
             root.addView(verify);
 
+            final CheckBox keepUnlock = new CheckBox(this);
+            keepUnlock.setText(R.string.tuning_keep_unlock);
+            keepUnlock.setTextSize(13f);
+            keepUnlock.setChecked(cfg.keepOnUnlock);
+            root.addView(keepUnlock);
+
+            final CheckBox consume = new CheckBox(this);
+            consume.setText(R.string.tuning_bottom_consume);
+            consume.setTextSize(13f);
+            consume.setChecked(cfg.bottomConsume);
+            root.addView(consume);
+
             final CheckBox launcher = new CheckBox(this);
             launcher.setText(R.string.tuning_launcher);
             launcher.setTextSize(13f);
@@ -767,7 +836,8 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
                                 public void onClick(android.content.DialogInterface dialog, int which) {
                                     saveTuning(topBar.getProgress() + 2,
                                             bottomBar.getProgress() + 2,
-                                            verify.isChecked(), launcher.isChecked(), current);
+                                            verify.isChecked(), consume.isChecked(),
+                                            keepUnlock.isChecked(), launcher.isChecked(), current);
                                 }
                             })
                     .setNegativeButton(android.R.string.cancel, null)
@@ -779,13 +849,27 @@ public final class MainActivity extends Activity implements StatusBus.Listener {
         }
     }
 
+    /** 比例文案带像素换算：不同机型状态栏/手势条高度不同，光看百分比没概念。 */
+    private String zoneLabel(int resId, int percent) {
+        int height = 0;
+        try {
+            height = getResources().getDisplayMetrics().heightPixels;
+        } catch (Throwable ignored) {
+        }
+        int px = Math.round(height * (percent / 100f));
+        return getString(resId) + "：" + percent + "%（约 " + px + "px）";
+    }
+
     private void saveTuning(int topPercent, int bottomPercent, boolean verifyOnly,
+                            boolean bottomConsume, boolean keepOnUnlock,
                             boolean launcherBottom, RuleSet current) {
         try {
             ModuleConfig cfg = (current == null ? ModuleConfig.DEFAULT : current.config())
                     .withTopRatio(topPercent / 100f)
                     .withBottomRatio(bottomPercent / 100f)
                     .withVerifyOnly(verifyOnly)
+                    .withBottomConsume(bottomConsume)
+                    .withKeepOnUnlock(keepOnUnlock)
                     .withLauncherBottom(launcherBottom);
             RuleSet next = store.setConfig(cfg);
             ModuleBroadcasts.pushRules(this, next);

@@ -24,9 +24,12 @@ public final class StatusReceiver extends BroadcastReceiver {
                 return;
             }
             StatusBus.publish(context, json);
+            com.edgeguard.gesture.common.StatusReport report =
+                    com.edgeguard.gesture.common.StatusReport.fromJson(json);
             // SystemUI 是权威：把 armed 写回本地，并刷新常驻通知/磁贴显示
-            ArmClient.syncFromStatus(context,
-                    com.edgeguard.gesture.common.StatusReport.fromJson(json));
+            ArmClient.syncFromStatus(context, report);
+            // 顺带把诊断（状态 + Hook 日志尾部）落盘，用户不需要从 logcat 复制
+            DiagExporter.exportAsync(context, report, "status-push");
         } catch (Throwable t) {
             Logx.w("StatusReceiver failed", t);
         }

@@ -36,12 +36,25 @@ final class TaskStackWatch {
                 Xlog.step("task-stack: ActivityTaskManager 不可用");
                 return false;
             }
-            Method register = atm.getClass().getMethod("registerTaskStackListener",
-                    Class.forName("android.app.IActivityTaskListener"));
+            // 实测（LineageOS 24 / A17）：Class.forName("android.app.IActivityTaskListener")
+            // 会抛 ClassNotFoundException（hidden API 限制），所以**不能**按参数类型 getMethod。
+            // 改成按"方法名 + 1 个参数"匹配，直接把 TaskStackListener 实例传进去。
+            Method register = null;
+            for (Method m : atm.getClass().getMethods()) {
+                if ("registerTaskStackListener".equals(m.getName())
+                        && m.getParameterTypes().length == 1) {
+                    register = m;
+                    break;
+                }
+            }
+            if (register == null) {
+                Xlog.step("task-stack: 找不到 registerTaskStackListener(1 参)");
+                return false;
+            }
             register.setAccessible(true);
             register.invoke(atm, new Listener());
             registered = true;
-            Xlog.step("task-stack listener registered");
+            Xlog.step("task-stack listener registered (by name/arity)");
             return true;
         } catch (Throwable t) {
             Xlog.step("task-stack listener 注册失败（退回按需查询）: " + t);

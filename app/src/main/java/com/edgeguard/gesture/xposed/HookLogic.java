@@ -88,7 +88,13 @@ final class HookLogic {
      */
     static boolean onLauncherBottomTouch(Object owner, MotionEvent ev) {
         ModuleConfig cfg = HookRuntime.config;
-        if (cfg == null || !cfg.launcherBottom) {
+        if (cfg == null) {
+            return false;
+        }
+        // 开关注入（config.launcherBottom）或游戏模式（armed）任一成立即可：
+        // 游戏模式本身就是用户显式发起的一次会话，没必要再要求勾第二个开关。
+        // 但 LSPosed 作用域仍必须手工加上桌面包名 —— 那一步模块无法替用户做。
+        if (!cfg.launcherBottom && !ArmController.isArmed()) {
             return false;
         }
         return gate(owner, ev, KIND_LAUNCHER, false, false);
@@ -162,18 +168,23 @@ final class HookLogic {
             lastDownTopZone = topZone;
         }
 
-        RuleSet.Decision decision = decisionForForeground();
-        final boolean observe = HookRuntime.observeZones;
-
         // ---- 「游戏模式」会话总闸（armed）----
         // armed 只对「顶部下拉 + 底部上滑」生效：进入后对**所有**前台应用生效（用完即走），
         // 左/右返回仍然按 per-app 规则常驻（保持旧用法完全不变）。
-        // 两条安全阀：前台必须可知（拿不到就不拦，fail-open）；前台是本模块控制器时不拦
-        // （否则用户永远进不了 UI 去关掉它）。
-        ForegroundTracker.Fg fg = currentForeground();
-        final boolean armed = ArmController.isArmed()
-                && fg != null
-                && !ModuleContract.MODULE_PACKAGE.equals(fg.packageName);
+        //
+        // 1.5.4 修正：**不再要求前台可知、也不再排除本模块自己**。
+        // 实测证据（diag）：刚用 App 里的按钮开完游戏模式，前台缓存还是
+        // com.edgeguard.gesture（或 ATMS 偶发返回 null），于是 armed 被判 false，
+        // 紧接着那次下拉就漏拦了 —— 表现就是"有时能拉下来"。
+        // 关掉它的按钮在屏幕中部（不在顶部 12%），所以不需要这层保护也不会把用户锁死。
+        final boolean armed = ArmController.isArmed();
+
+        // armed + 顶部下拉：命中条件只看"规则 or 游戏模式"，与前台无关 →
+        // 直接跳过前台查询（这条路径最常用；本 ROM 的 TaskStack 推送注册曾失败，
+        // 前台查询会退化成每次 ACTION_DOWN 一次 Binder）。
+        RuleSet.Decision decision = (armed && kind == KIND_SHADE)
+                ? RuleSet.Decision.NONE : decisionForForeground();
+        final boolean observe = HookRuntime.observeZones;
         final boolean blockTop = decision.blockTopShade || armed;
         final boolean blockBottom = decision.blockBottom || armed;
         final boolean anyBlock = blockTop || blockBottom
@@ -220,8 +231,16 @@ final class HookLogic {
                         side = EdgeMetrics.sideOf(owner, ev);
                     }
                     if (bottomZone && blockBottom) {
-                        block = true;
-                        label = "BOTTOM(返回通道)";
+                        // 1.5.4：默认**只观测不吞**。
+                        // 实测（bottomBlk=5 但 Home 仍执行）证明在 SystemUI 侧消费拦不住 Launcher，
+                        // 而消费会让游戏窗口收不到底部 12% 的触摸 —— 对音游是净损失。
+                        // 真要试验就打开 config.bottomConsume；真正的拦截走策略 B。
+                        if (cfg.bottomConsume) {
+                            block = true;
+                            label = "BOTTOM(返回通道/已开启吞事件)";
+                        } else {
+                            label = "BOTTOM(仅观测，不吞)";
+                        }
                     } else if (side == EdgeMetrics.SIDE_LEFT && decision.blockLeft) {
                         block = true;
                         label = "LEFT";

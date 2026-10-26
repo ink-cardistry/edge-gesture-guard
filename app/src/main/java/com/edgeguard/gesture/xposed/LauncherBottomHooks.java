@@ -90,7 +90,52 @@ final class LauncherBottomHooks {
         } else {
             Logx.i("[LAUNCHER] 底部手势入口已挂载: " + total + " 个");
         }
+        reportToApp(total, 0);
         return total;
+    }
+
+    /**
+     * 把"策略 B 挂上了几个入口"回报给 App（走 ContentProvider.update）。
+     *
+     * 桌面进程可能比 App 更早起来（appContext 还是 null），所以带重试；
+     * 回报失败只是 UI 看不到状态，不影响拦截本身。
+     */
+    private static void reportToApp(final int count, final int attempt) {
+        try {
+            final android.content.Context context = Ctx.appContext();
+            if (context == null) {
+                if (attempt < 12) {
+                    new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    reportToApp(count, attempt + 1);
+                                }
+                            }, 600L);
+                }
+                return;
+            }
+            android.content.ContentValues cv = new android.content.ContentValues();
+            cv.put(com.edgeguard.gesture.common.ModuleContract.COLUMN_LAUNCHER_STATUS,
+                    "hooks=" + count
+                            + ",v=" + HookRuntime.status.moduleVersion
+                            + ",ts=" + System.currentTimeMillis());
+            // 把桌面进程自己的日志尾部也带过去 —— 这是排查策略 B 的唯一证据来源
+            StringBuilder diag = new StringBuilder();
+            for (String line : HookRuntime.diagSnapshot(80)) {
+                diag.append(line).append('\n');
+            }
+            if (diag.length() == 0) {
+                diag.append("(桌面进程没有采集到日志)");
+            }
+            cv.put(com.edgeguard.gesture.common.ModuleContract.COLUMN_LAUNCHER_DIAG,
+                    diag.toString());
+            int rows = context.getContentResolver().update(
+                    com.edgeguard.gesture.common.ModuleContract.RULES_URI, cv, null, null);
+            Xlog.step("[LAUNCHER] 已回报给 App: hooks=" + count + " rows=" + rows);
+        } catch (Throwable t) {
+            Xlog.step("[LAUNCHER] 回报失败（不影响拦截）: " + t);
+        }
     }
 
     // ------------------------------------------------------------------

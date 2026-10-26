@@ -37,13 +37,39 @@ public final class ModuleConfig {
     public final boolean verifyOnly;
     /** true = 允许 Launcher 进程内的底部 Hook（策略 B，需手工扩展作用域） */
     public final boolean launcherBottom;
+    /**
+     * 策略 A 是否真的吞掉底部事件。**默认 false**。
+     *
+     * 实测结论：在 SystemUI 的返回手势 monitor 上消费底部事件，**拦不住** Launcher 的
+     * 上滑 Home（monitor 之间不互斥），但会让游戏窗口收不到底部 12% 的触摸 ——
+     * 对音游是纯亏。所以默认只观测计数，真正的拦截走策略 B。
+     */
+    public final boolean bottomConsume;
+    /**
+     * 锁屏→解锁后是否**保持**游戏模式（默认 false = 自动退出）。
+     * 默认值沿用你的原始需求；但打音游时"锁一下屏再回来"很常见，
+     * 自动退出会让人以为"没生效"，所以给一个开关。
+     */
+    public final boolean keepOnUnlock;
 
     public ModuleConfig(float topZoneRatio, float bottomZoneRatio,
                         boolean verifyOnly, boolean launcherBottom) {
+        this(topZoneRatio, bottomZoneRatio, verifyOnly, launcherBottom, false, false);
+    }
+
+    public ModuleConfig(float topZoneRatio, float bottomZoneRatio, boolean verifyOnly,
+                        boolean launcherBottom, boolean bottomConsume) {
+        this(topZoneRatio, bottomZoneRatio, verifyOnly, launcherBottom, bottomConsume, false);
+    }
+
+    public ModuleConfig(float topZoneRatio, float bottomZoneRatio, boolean verifyOnly,
+                        boolean launcherBottom, boolean bottomConsume, boolean keepOnUnlock) {
         this.topZoneRatio = sane(topZoneRatio, DEFAULT_TOP_RATIO);
         this.bottomZoneRatio = sane(bottomZoneRatio, DEFAULT_BOTTOM_RATIO);
         this.verifyOnly = verifyOnly;
         this.launcherBottom = launcherBottom;
+        this.bottomConsume = bottomConsume;
+        this.keepOnUnlock = keepOnUnlock;
     }
 
     private static float sane(float value, float fallback) {
@@ -57,19 +83,33 @@ public final class ModuleConfig {
     }
 
     public ModuleConfig withTopRatio(float value) {
-        return new ModuleConfig(value, bottomZoneRatio, verifyOnly, launcherBottom);
+        return new ModuleConfig(value, bottomZoneRatio, verifyOnly, launcherBottom,
+                bottomConsume, keepOnUnlock);
     }
 
     public ModuleConfig withBottomRatio(float value) {
-        return new ModuleConfig(topZoneRatio, value, verifyOnly, launcherBottom);
+        return new ModuleConfig(topZoneRatio, value, verifyOnly, launcherBottom,
+                bottomConsume, keepOnUnlock);
     }
 
     public ModuleConfig withVerifyOnly(boolean value) {
-        return new ModuleConfig(topZoneRatio, bottomZoneRatio, value, launcherBottom);
+        return new ModuleConfig(topZoneRatio, bottomZoneRatio, value, launcherBottom,
+                bottomConsume, keepOnUnlock);
     }
 
     public ModuleConfig withLauncherBottom(boolean value) {
-        return new ModuleConfig(topZoneRatio, bottomZoneRatio, verifyOnly, value);
+        return new ModuleConfig(topZoneRatio, bottomZoneRatio, verifyOnly, value,
+                bottomConsume, keepOnUnlock);
+    }
+
+    public ModuleConfig withBottomConsume(boolean value) {
+        return new ModuleConfig(topZoneRatio, bottomZoneRatio, verifyOnly, launcherBottom,
+                value, keepOnUnlock);
+    }
+
+    public ModuleConfig withKeepOnUnlock(boolean value) {
+        return new ModuleConfig(topZoneRatio, bottomZoneRatio, verifyOnly, launcherBottom,
+                bottomConsume, value);
     }
 
     public JSONObject toJson() {
@@ -79,6 +119,8 @@ public final class ModuleConfig {
             o.put("bottom", round(bottomZoneRatio));
             o.put("verify", verifyOnly);
             o.put("launcher", launcherBottom);
+            o.put("bottomConsume", bottomConsume);
+            o.put("keepOnUnlock", keepOnUnlock);
         } catch (Throwable ignored) {
             // JSONObject.put 只在 key 为 null 时抛，这里不会发生
         }
@@ -94,7 +136,9 @@ public final class ModuleConfig {
                     (float) o.optDouble("top", DEFAULT_TOP_RATIO),
                     (float) o.optDouble("bottom", DEFAULT_BOTTOM_RATIO),
                     o.optBoolean("verify", false),
-                    o.optBoolean("launcher", false));
+                    o.optBoolean("launcher", false),
+                    o.optBoolean("bottomConsume", false),
+                    o.optBoolean("keepOnUnlock", false));
         } catch (Throwable t) {
             return DEFAULT;
         }
@@ -118,7 +162,9 @@ public final class ModuleConfig {
         return "top=" + Math.round(topZoneRatio * 100) + "%"
                 + " bottom=" + Math.round(bottomZoneRatio * 100) + "%"
                 + (verifyOnly ? " 验证模式(只记日志)" : "")
-                + (launcherBottom ? " LauncherHook=开" : "");
+                + (launcherBottom ? " LauncherHook=开" : "")
+                + (bottomConsume ? " 策略A吞事件" : "")
+                + (keepOnUnlock ? " 锁屏保持" : "");
     }
 
     @Override

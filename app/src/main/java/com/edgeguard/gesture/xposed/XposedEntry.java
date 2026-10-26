@@ -54,6 +54,13 @@ public final class XposedEntry implements IXposedHookLoadPackage {
             // 0) 最早期的注入标记：即使后面全部初始化失败，App 侧也能看到"模块确实进过 SystemUI"
             writeLoadedMarker();
 
+            // 0.5) 先把日志旁路接进内存环形缓冲（之后所有日志都会随状态报告送到 App）
+            try {
+                HookRuntime.installLogSink();
+            } catch (Throwable t) {
+                Logx.w("installLogSink failed", t);
+            }
+
             // 1) 先装手势 Hook（不依赖 Context，越早越好）
             try {
                 GestureHooks.install(lpparam.classLoader);
@@ -131,6 +138,12 @@ public final class XposedEntry implements IXposedHookLoadPackage {
                 return;
             }
             int count = 0;
+            try {
+                // 先接日志旁路，桌面进程的探测/挂载日志才能回报给 App
+                HookRuntime.installLogSink();
+            } catch (Throwable t) {
+                Logx.w("[LAUNCHER] installLogSink failed", t);
+            }
             try {
                 count = LauncherBottomHooks.install(lpparam.classLoader);
             } catch (Throwable t) {
