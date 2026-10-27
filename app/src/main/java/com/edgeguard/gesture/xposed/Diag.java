@@ -41,7 +41,7 @@ final class Diag {
             return;
         }
         try {
-            String value = "v=1.6.5"
+            String value = "v=1.6.6"
                     + ";ts=" + System.currentTimeMillis()
                     + ";edge=" + (HookRuntime.status.edgeHooked ? 1 : 0)
                     + ";legacy=" + HookRuntime.legacyHooks

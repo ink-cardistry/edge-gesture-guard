@@ -52,7 +52,7 @@ final class GestureHooks {
 
     static void install(ClassLoader classLoader) {
         StatusReport status = HookRuntime.status;
-        status.moduleVersion = "1.6.5";
+        status.moduleVersion = "1.6.6";
 
         Class<?> edgeClass = null;
         try {
@@ -90,6 +90,14 @@ final class GestureHooks {
             } catch (Throwable t) {
                 Logx.e("NavBarHooks.install failed", t);
             }
+        }
+
+        // 顶部状态栏隐藏（游戏模式期间）：只针对 PhoneStatusBarView，可控可还原
+        int sbCount = 0;
+        try {
+            sbCount = StatusBarHider.install(classLoader);
+        } catch (Throwable t) {
+            Logx.e("StatusBarHider.install failed", t);
         }
 
         // 功能二：通知栏下拉屏蔽（仍在 SystemUI 进程内，独立于返回手势 Hook）
@@ -133,7 +141,7 @@ final class GestureHooks {
                 + ", legacy=" + legacyCount + ", modern=" + modernCount
                 + ", backCallback=" + backCallbackCount
                 + ", shade=" + status.shadeState + "(" + shadeCount + ")"
-                + ", navbar=" + navCount
+                + ", navbar=" + navCount + ", statusbar=" + sbCount
                 + ", bottom=" + status.bottomState
                 + ", zones[" + HookRuntime.config.describe() + "]");
         Logx.i("hook install finished: edge=" + status.edgeHooked

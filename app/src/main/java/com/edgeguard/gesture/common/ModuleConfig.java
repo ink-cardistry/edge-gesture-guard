@@ -51,6 +51,8 @@ public final class ModuleConfig {
      * 自动退出会让人以为"没生效"，所以给一个开关。
      */
     public final boolean keepOnUnlock;
+    /** 游戏模式期间隐藏顶部状态栏（默认 true）。1.6.2 里意外出现过这个效果，用户要求保留。 */
+    public final boolean hideStatusBar;
 
     public ModuleConfig(float topZoneRatio, float bottomZoneRatio,
                         boolean verifyOnly, boolean launcherBottom) {
@@ -64,12 +66,20 @@ public final class ModuleConfig {
 
     public ModuleConfig(float topZoneRatio, float bottomZoneRatio, boolean verifyOnly,
                         boolean launcherBottom, boolean bottomConsume, boolean keepOnUnlock) {
+        this(topZoneRatio, bottomZoneRatio, verifyOnly, launcherBottom, bottomConsume,
+                keepOnUnlock, true);
+    }
+
+    public ModuleConfig(float topZoneRatio, float bottomZoneRatio, boolean verifyOnly,
+                        boolean launcherBottom, boolean bottomConsume, boolean keepOnUnlock,
+                        boolean hideStatusBar) {
         this.topZoneRatio = sane(topZoneRatio, DEFAULT_TOP_RATIO);
         this.bottomZoneRatio = sane(bottomZoneRatio, DEFAULT_BOTTOM_RATIO);
         this.verifyOnly = verifyOnly;
         this.launcherBottom = launcherBottom;
         this.bottomConsume = bottomConsume;
         this.keepOnUnlock = keepOnUnlock;
+        this.hideStatusBar = hideStatusBar;
     }
 
     private static float sane(float value, float fallback) {
@@ -109,7 +119,12 @@ public final class ModuleConfig {
 
     public ModuleConfig withKeepOnUnlock(boolean value) {
         return new ModuleConfig(topZoneRatio, bottomZoneRatio, verifyOnly, launcherBottom,
-                bottomConsume, value);
+                bottomConsume, value, hideStatusBar);
+    }
+
+    public ModuleConfig withHideStatusBar(boolean value) {
+        return new ModuleConfig(topZoneRatio, bottomZoneRatio, verifyOnly, launcherBottom,
+                bottomConsume, keepOnUnlock, value);
     }
 
     public JSONObject toJson() {
@@ -121,6 +136,7 @@ public final class ModuleConfig {
             o.put("launcher", launcherBottom);
             o.put("bottomConsume", bottomConsume);
             o.put("keepOnUnlock", keepOnUnlock);
+            o.put("hideStatusBar", hideStatusBar);
         } catch (Throwable ignored) {
             // JSONObject.put 只在 key 为 null 时抛，这里不会发生
         }
@@ -138,7 +154,8 @@ public final class ModuleConfig {
                     o.optBoolean("verify", false),
                     o.optBoolean("launcher", false),
                     o.optBoolean("bottomConsume", false),
-                    o.optBoolean("keepOnUnlock", false));
+                    o.optBoolean("keepOnUnlock", false),
+                    o.optBoolean("hideStatusBar", true));
         } catch (Throwable t) {
             return DEFAULT;
         }

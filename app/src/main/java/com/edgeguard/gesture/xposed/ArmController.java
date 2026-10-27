@@ -62,6 +62,10 @@ final class ArmController {
                 startLockWatch(context);
             }
             startWatchdog();
+            try {
+                StatusBarHider.enforce();
+            } catch (Throwable ignored) {
+            }
             pushStatus();
         } catch (Throwable t) {
             Logx.w("arm failed", t);
@@ -75,7 +79,7 @@ final class ArmController {
             source = "";
             stopWatchdog();
             try {
-                NavBarHooks.restore();
+                StatusBarHider.restore();
             } catch (Throwable ignored) {
             }
             if (was) {
@@ -217,6 +221,10 @@ final class ArmController {
                     return;
                 }
 
+                try {
+                    StatusBarHider.enforce();
+                } catch (Throwable ignored) {
+                }
                 Handler h = watchdog;
                 if (h != null && armed) {
                     h.postDelayed(this, WATCH_MS);
