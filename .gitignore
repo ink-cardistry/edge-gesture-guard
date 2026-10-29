@@ -10,5 +10,8 @@ captures/
 .externalNativeBuild/
 .cxx/
 *.keystore
+*.jks
+signing/
+keystore.properties
 !app/libs/api-82.jar
 !app/libs/hidden-stub.jar

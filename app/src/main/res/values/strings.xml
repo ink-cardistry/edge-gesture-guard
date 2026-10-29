@@ -13,6 +13,7 @@
     <string name="btn_export_diag">导出诊断</string>
     <string name="diag_exported">已导出到：%1$s</string>
 
+    <string name="block_rules_hint">这些规则只在「游戏模式」开启时生效；关着时完全不参与判定（零额外开销）。</string>
     <string name="block_leftright_hint">这两个是常驻规则。顶部下拉 / 底部上滑不在列表里，统一由上面的「游戏模式」控制。</string>
     <string name="block_left">屏蔽左边缘返回</string>
     <string name="block_right">屏蔽右边缘返回</string>

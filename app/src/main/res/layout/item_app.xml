@@ -80,11 +80,27 @@
             android:text="@string/block_right"
             android:textSize="14sp" />
 
+        <CheckBox
+            android:id="@+id/block_top_shade"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="44dp"
+            android:text="@string/block_top_shade"
+            android:textSize="14sp" />
+
+        <CheckBox
+            android:id="@+id/block_bottom"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="44dp"
+            android:text="@string/block_bottom"
+            android:textSize="14sp" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:paddingBottom="4dp"
-            android:text="@string/block_leftright_hint"
+            android:text="@string/block_rules_hint"
             android:textColor="?android:attr/textColorSecondary"
             android:textSize="11sp" />
     </LinearLayout>

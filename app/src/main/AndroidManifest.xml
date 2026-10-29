@@ -45,7 +45,7 @@
         <!-- ================= 规则读取（Hook 进程兜底拉取） ================= -->
         <provider
             android:name=".common.RulesProvider"
-            android:authorities="com.edgeguard.gesture.rules"
+            android:authorities="io.github.usernameNaN1234.EdgeGestureGuard.rules"
             android:enabled="true"
             android:exported="true"
             android:grantUriPermissions="false" />
@@ -56,7 +56,7 @@
             android:exported="true"
             android:label="@string/app_name">
             <intent-filter>
-                <action android:name="com.edgeguard.gesture.action.RULES_REQUEST" />
+                <action android:name="io.github.usernameNaN1234.EdgeGestureGuard.action.RULES_REQUEST" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
@@ -67,7 +67,7 @@
             android:exported="true"
             android:label="@string/app_name">
             <intent-filter>
-                <action android:name="com.edgeguard.gesture.action.STATUS_PUSH" />
+                <action android:name="io.github.usernameNaN1234.EdgeGestureGuard.action.STATUS_PUSH" />
             </intent-filter>
         </receiver>
 
@@ -76,8 +76,8 @@
             android:name=".app.ArmedReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.edgeguard.gesture.action.NOTIFY_EXIT" />
-                <action android:name="com.edgeguard.gesture.action.NOTIFY_TOGGLE" />
+                <action android:name="io.github.usernameNaN1234.EdgeGestureGuard.action.NOTIFY_EXIT" />
+                <action android:name="io.github.usernameNaN1234.EdgeGestureGuard.action.NOTIFY_TOGGLE" />
             </intent-filter>
         </receiver>
 

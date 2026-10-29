@@ -25,8 +25,13 @@ JAVA=$HOME_DIR/bin/java \
 JAVAC=$HOME_DIR/.build/j.sh \
 sh tools/build-local.sh
 
-cp .out/signed/aligned-debugSigned.apk "dist/EdgeGestureGuard-$VN-debug.apk"
-echo "== apk: dist/EdgeGestureGuard-$VN-debug.apk"
+if [ -f .out/signed/aligned-signed.apk ]; then
+  cp .out/signed/aligned-signed.apk "dist/EdgeGestureGuard-$VN-release.apk"
+  echo "== apk(release 签名): dist/EdgeGestureGuard-$VN-release.apk"
+else
+  cp .out/signed/aligned-debugSigned.apk "dist/EdgeGestureGuard-$VN-debug.apk"
+  echo "== apk(debug 签名): dist/EdgeGestureGuard-$VN-debug.apk"
+fi
 
 git add -A
 if git diff --cached --quiet; then
@@ -41,5 +46,6 @@ fi
 [ -f "$HOME_DIR/.eg-git-cred" ] || { echo "missing $HOME_DIR/.eg-git-cred (token)"; exit 1; }
 GH_TOKEN=$(sed -E 's#https://x-access-token:([^@]+)@github.com#\1#' "$HOME_DIR/.eg-git-cred")
 export GH_TOKEN
-export GH_REPO=ink-cardistry/edge-gesture-guard
+export GH_REPO="${GH_REPO:-usernameNaN1234/edge-gesture-guard}"
+export GH_RELEASE="${GH_RELEASE:-1}"
 python3 tools/push-via-api.py

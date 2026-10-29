@@ -13,7 +13,7 @@
   "本地 commit -> 以远端 main 为父新建对象 -> 推进远端 main"。
 - 无变化时只补标签，不产生空提交。
 """
-import base64, json, os, subprocess, urllib.request, urllib.error
+import base64, json, os, subprocess, urllib.parse, urllib.request, urllib.error
 from datetime import datetime, timedelta, timezone
 
 TOKEN = os.environ.get("GH_TOKEN", "")
@@ -131,7 +131,81 @@ def main():
             print("tag", tag, "->", target[:12])
         except urllib.error.HTTPError as exc:
             print("tag", tag, "failed:", exc.code)
+
+    if os.environ.get("GH_RELEASE") == "1":
+        publish_release()
     print("DONE")
+
+
+def publish_release():
+    """创建 GitHub Release 并上传带 release 签名的 APK。
+
+    注意：asset 上传走 uploads.github.com（与 api.github.com 不同域名），
+    若本机网络只放行 api.github.com，上传会失败 —— 此时仍会创建 Release，
+    只是需要手动把 dist 里的 APK 拖进 Release。
+    """
+    version = ""
+    for line in git("show", "HEAD:app/build.gradle").splitlines():
+        if "versionName" in line and '"' in line:
+            version = line.split('"')[1]
+            break
+    if not version:
+        print("release: version not found, skip")
+        return
+    tag = "v" + version
+    try:
+        api("GET", "/repos/%s/git/ref/tags/%s" % (REPO, tag))
+        print("release: tag", tag, "exists")
+    except urllib.error.HTTPError:
+        head = api("GET", "/repos/%s/git/ref/heads/main" % REPO)["object"]["sha"]
+        obj = api("POST", "/repos/%s/git/tags" % REPO,
+                  {"tag": tag, "message": "EdgeGestureGuard " + version,
+                   "object": head, "type": "commit"})
+        api("POST", "/repos/%s/git/refs" % REPO,
+            {"ref": "refs/tags/" + tag, "sha": obj["sha"]})
+        print("release: tag", tag, "created")
+
+    body = ("## EdgeGestureGuard " + version + "\n\n"
+            "- 包名：io.github.usernameNaN1234.EdgeGestureGuard\n"
+            "- 签名：release key（RSA 4096, CN=ink-cardistry）\n"
+            "- 作用域（推荐）：System UI + 桌面 / Launcher\n\n"
+            "安装前请卸载旧版（签名不同无法覆盖安装）。\n\n"
+            "详见 README。")
+    try:
+        rel = api("POST", "/repos/%s/releases" % REPO, {
+            "tag_name": tag, "name": "EdgeGestureGuard " + version,
+            "body": body, "draft": False, "prerelease": False,
+        })
+        print("release:", rel.get("html_url"))
+    except urllib.error.HTTPError as exc:
+        print("release create failed:", exc.code)
+        return
+
+    apk_dir = "dist"
+    apks = [f for f in (os.listdir(apk_dir) if os.path.isdir(apk_dir) else [])
+            if f.endswith(".apk") and version in f]
+    if not apks:
+        print("release: no apk matched for", version)
+        return
+    path = os.path.join(apk_dir, apks[0])
+    data = open(path, "rb").read()
+    up = urllib.request.Request(
+        "https://uploads.github.com/repos/%s/releases/%s/assets?name=%s"
+        % (REPO, rel["id"], urllib.parse.quote(apks[0])),
+        data=data, method="POST")
+    up.add_header("Authorization", "Bearer " + TOKEN)
+    up.add_header("Content-Type", "application/vnd.android.package-archive")
+    up.add_header("Accept", "application/vnd.github+json")
+    try:
+        with urllib.request.urlopen(up, timeout=300) as resp:
+            info = json.loads(resp.read())
+        print("release asset:", info.get("name"), info.get("size"), "bytes")
+    except urllib.error.HTTPError as exc:
+        print("release asset upload failed:", exc.code,
+              "（uploads.github.com 可能被网络策略拦截，请手动上传", path, "）")
+    except Exception as exc:
+        print("release asset upload error:", exc,
+              "（请手动上传", path, "）")
 
 
 if __name__ == "__main__":

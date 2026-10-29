@@ -1,7 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- LSPosed 作用域：只勾 System UI，绝不 Hook 目标应用/游戏进程 -->
+    <!--
+      LSPosed 作用域（推荐值，安装后会自动预勾选）：
+        1) com.android.systemui —— 左右返回、顶部下拉、状态栏隐藏、游戏模式总闸
+        2) 桌面（Launcher）—— 底部上滑屏蔽（真正的上滑回桌面由桌面进程执行）
+
+      桌面部分缺了只会让"底部上滑屏蔽"不生效，其它功能照常；
+      各 ROM 的桌面包名不同，所以把常见几个都列上（没装的会被 LSPosed 忽略）。
+    -->
     <string-array name="xposed_scope">
         <item>com.android.systemui</item>
+        <item>com.android.launcher3</item>
+        <item>com.google.android.apps.nexuslauncher</item>
+        <item>com.miui.home</item>
+        <item>com.bbk.launcher2</item>
+        <item>com.oppo.launcher</item>
+        <item>com.huawei.android.launcher</item>
     </string-array>
 </resources>
