@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">边缘手势守卫</string>
-    <string name="xposed_description">按前台应用/Activity 屏蔽左/右返回、顶部下拉通知栏与底部上滑（默认仅 Hook System UI）。</string>
+    <string name="app_name">EdgeGestureGuard</string>
+    <string name="xposed_description">按应用屏蔽左右返回、顶部通知栏与底部上滑手势，打音游时防误触</string>
 
     <string name="search_hint">搜索应用名或包名</string>
     <string name="include_system_apps">包含系统应用</string>

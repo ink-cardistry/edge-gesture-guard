@@ -46,6 +46,6 @@ fi
 [ -f "$HOME_DIR/.eg-git-cred" ] || { echo "missing $HOME_DIR/.eg-git-cred (token)"; exit 1; }
 GH_TOKEN=$(sed -E 's#https://x-access-token:([^@]+)@github.com#\1#' "$HOME_DIR/.eg-git-cred")
 export GH_TOKEN
-export GH_REPO="${GH_REPO:-usernameNaN1234/edge-gesture-guard}"
+export GH_REPO="${GH_REPO:-usernameNaN1234/EdgeGestureGuard}"
 export GH_RELEASE="${GH_RELEASE:-1}"
 python3 tools/push-via-api.py
